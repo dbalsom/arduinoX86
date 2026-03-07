@@ -89,3 +89,4 @@ platformio/ArduinoX86/asm/*.lst
 *.DS_Store
 
 /shields/286_V3.zip
+/shields/386EX_V4_C*
