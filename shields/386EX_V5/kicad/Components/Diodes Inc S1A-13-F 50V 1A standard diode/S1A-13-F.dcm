@@ -1,0 +1,9 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP S1A-13-F
+D Diodes Inc S1A-13-F, SMT Switching Diode, 50V 1A, 3000ns, 2-Pin DO-214AC
+K
+F https://componentsearchengine.com/Datasheets/2/S1A-13-F.pdf
+$ENDCMP
+#
+#End Doc Library

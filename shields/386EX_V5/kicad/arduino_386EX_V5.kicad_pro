@@ -49,7 +49,7 @@
         "silk_text_upright": false,
         "zones": {
           "45_degree_only": false,
-          "min_clearance": 0.508
+          "min_clearance": 0.25
         }
       },
       "diff_pair_dimensions": [
@@ -59,7 +59,52 @@
           "width": 0.0
         }
       ],
-      "drc_exclusions": [],
+      "drc_exclusions": [
+        [
+          "clearance|129540000|86820000|4299aed0-3df4-49a5-803d-d9156d11079e|5a0cbdf8-095e-4f6c-ae9d-b71aa4a42007",
+          ""
+        ],
+        [
+          "clearance|129540000|86920000|10a65205-a78c-4542-a878-b6f9092a0959|5a0cbdf8-095e-4f6c-ae9d-b71aa4a42007",
+          ""
+        ],
+        [
+          "clearance|150969759|96870240|c1f984f7-4db8-410b-bf29-85da7593672c|ffe5d1d9-cad5-4790-a37b-3a97eabdb8b8",
+          ""
+        ],
+        [
+          "clearance|150969759|96870240|d4dd19df-d881-4799-9327-47a188e44d65|ffe5d1d9-cad5-4790-a37b-3a97eabdb8b8",
+          ""
+        ],
+        [
+          "clearance|163266489|106635497|0ea8dfd3-eebc-4383-8a20-71697025ca39|343aaf65-7c24-4d3b-b8c2-ccd03deedac6",
+          ""
+        ],
+        [
+          "clearance|163895936|107522683|343aaf65-7c24-4d3b-b8c2-ccd03deedac6|d9a37e43-2e25-4233-bd18-611ed13a7c54",
+          ""
+        ],
+        [
+          "clearance|173010000|75381000|023cd390-728e-401f-8fb1-b44ede1db9e0|180605bd-fd74-4e68-9d6e-762b4c388d4d",
+          ""
+        ],
+        [
+          "clearance|173010000|75829996|023cd390-728e-401f-8fb1-b44ede1db9e0|607d4407-86b4-47f4-ae95-3a5254660e8c",
+          ""
+        ],
+        [
+          "clearance|175382162|88510478|ce2bec13-495a-40e8-a253-af44b85d8123|f53360bc-5e71-4e10-871c-0b648444f546",
+          ""
+        ],
+        [
+          "lib_footprint_issues|149860000|96520000|788786ce-3a51-40e8-8f1a-7125d3c5c766|00000000-0000-0000-0000-000000000000",
+          ""
+        ],
+        [
+          "lib_footprint_issues|187322182|86879508|2756f6df-bb4d-4e0c-a1ba-dfbdf69af77a|00000000-0000-0000-0000-000000000000",
+          ""
+        ]
+      ],
       "meta": {
         "version": 2
       },
@@ -90,7 +135,7 @@
         "items_not_allowed": "error",
         "length_out_of_range": "error",
         "lib_footprint_issues": "warning",
-        "lib_footprint_mismatch": "warning",
+        "lib_footprint_mismatch": "ignore",
         "malformed_courtyard": "error",
         "microvia_drill_out_of_range": "error",
         "mirrored_text_on_front_layer": "warning",
@@ -102,13 +147,13 @@
         "padstack": "error",
         "pth_inside_courtyard": "ignore",
         "shorting_items": "error",
-        "silk_edge_clearance": "warning",
+        "silk_edge_clearance": "ignore",
         "silk_over_copper": "warning",
-        "silk_overlap": "warning",
+        "silk_overlap": "ignore",
         "skew_out_of_range": "error",
         "solder_mask_bridge": "error",
         "starved_thermal": "error",
-        "text_height": "warning",
+        "text_height": "ignore",
         "text_on_edge_cuts": "error",
         "text_thickness": "warning",
         "through_hole_pad_without_hole": "error",
@@ -128,12 +173,12 @@
         "allow_blind_buried_vias": false,
         "allow_microvias": false,
         "max_error": 0.005,
-        "min_clearance": 0.0,
-        "min_connection": 0.0,
+        "min_clearance": 0.05,
+        "min_connection": 0.1,
         "min_copper_edge_clearance": 0.0,
         "min_groove_width": 0.0,
-        "min_hole_clearance": 0.25,
-        "min_hole_to_hole": 0.25,
+        "min_hole_clearance": 0.2,
+        "min_hole_to_hole": 0.2,
         "min_microvia_diameter": 0.2,
         "min_microvia_drill": 0.1,
         "min_resolved_spokes": 1,
@@ -146,7 +191,7 @@
         "min_via_diameter": 0.4,
         "solder_mask_clearance": 0.0,
         "solder_mask_min_width": 0.0,
-        "solder_mask_to_copper_clearance": 0.0,
+        "solder_mask_to_copper_clearance": 0.005,
         "use_height_for_length_calcs": true
       },
       "teardrop_options": [
@@ -501,7 +546,7 @@
     "pinned_symbol_libs": []
   },
   "meta": {
-    "filename": "arduino_387SX_V2.kicad_pro",
+    "filename": "arduino_386EX_V5.kicad_pro",
     "version": 3
   },
   "net_settings": {
@@ -537,7 +582,7 @@
       "gencad": "",
       "idf": "",
       "netlist": "",
-      "plot": "",
+      "plot": "PCB layout PDFs/",
       "pos_files": "",
       "specctra_dsn": "",
       "step": "",
@@ -645,7 +690,7 @@
       "workbook_filename": ""
     },
     "page_layout_descr_file": "",
-    "plot_directory": "",
+    "plot_directory": "Schematic PDFs/",
     "space_save_all_events": true,
     "spice_adjust_passive_values": false,
     "spice_current_sheet_as_root": false,

@@ -1,0 +1,7 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "mega")(type "KiCad")(uri "${KIPRJMOD}/arduino.kicad_sym")(options "")(descr ""))
+  (lib (name "387sx")(type "KiCad")(uri "${KIPRJMOD}/387sx.kicad_sym")(options "")(descr ""))
+  (lib (name "S1A-13-F")(type "KiCad")(uri "${KIPRJMOD}/Components/Diodes Inc S1A-13-F 50V 1A standard diode/S1A-13-F.kicad_sym")(options "")(descr ""))
+  (lib (name "LDL1117S33R")(type "KiCad")(uri "${KIPRJMOD}/Components/ST LDL1117S33R 1A 3.3V LDO/LDL1117S33R.kicad_sym")(options "")(descr ""))
+)
