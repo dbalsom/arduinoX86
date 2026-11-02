@@ -25,5 +25,7 @@ pub mod canvas;
 pub mod cycle_table;
 pub mod data_table;
 pub mod data_visualizer;
+mod descriptors_v2;
+pub mod registers_v2;
 pub mod registers_v3;
 pub mod tab_group;

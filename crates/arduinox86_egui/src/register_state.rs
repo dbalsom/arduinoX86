@@ -40,7 +40,7 @@ impl RegisterString {
         }
     }
 
-    fn from_diff<T: AsRef<str>>(text: T, diff: bool) -> Self {
+    pub(crate) fn from_diff<T: AsRef<str>>(text: T, diff: bool) -> Self {
         RegisterString {
             text:    text.as_ref().to_string(),
             color32: if diff { Color32::CYAN } else { TEXT_COLOR },

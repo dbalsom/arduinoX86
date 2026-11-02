@@ -53,6 +53,7 @@ impl RegisterControlV3 {
         }
         else {
             self.reg_strings = RegisterStringStateV3::from(&self.regs);
+            self.final_regs = None;
         }
     }
 

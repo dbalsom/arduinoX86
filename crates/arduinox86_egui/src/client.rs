@@ -70,7 +70,12 @@ impl ClientContext {
             ServerCpuType::Intel80386 => {
                 RemoteCpuRegisters::V3(RemoteCpuRegistersV3::A(RemoteCpuRegistersV3A::default()))
             }
-            ServerCpuType::Intel80286 => RemoteCpuRegisters::V2(RemoteCpuRegistersV2::default()),
+            ServerCpuType::Intel80286 => {
+                let mut regs = RemoteCpuRegistersV2::default();
+                regs.normalize_descriptors();
+                regs.cs_desc.set_base_address(0xFF0000);
+                RemoteCpuRegisters::V2(regs)
+            }
             _ => RemoteCpuRegisters::V1(RemoteCpuRegistersV1::default()),
         };
 

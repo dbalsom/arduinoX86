@@ -178,6 +178,7 @@ impl App {
 
     pub fn app_init(&mut self) {
         self.ts.serial_manager.refresh();
+        self.ts.selected_serial_port = self.ts.serial_manager.preferred_port_index();
         let event = ScheduledEvent::new(ScheduleType::Repeat, GuiEvent::PollStatus, SERVER_UPDATE_MS);
         self.ts.scheduler.add_event(event);
         self.ts.app_init = true;
@@ -393,7 +394,14 @@ impl eframe::App for App {
                     .config(MenuConfig::default().close_behavior(PopupCloseBehavior::CloseOnClickOutside))
                     .ui(ui, |ui| {
                         if ui.button("Refresh").clicked() {
+                            let selected_name = self.ts.serial_manager.ports()
+                                .get(self.ts.selected_serial_port)
+                                .map(|port| port.port_name.clone());
                             self.ts.serial_manager.refresh();
+                            self.ts.selected_serial_port = self.ts.serial_manager.ports()
+                                .iter()
+                                .position(|port| Some(&port.port_name) == selected_name.as_ref())
+                                .unwrap_or_else(|| self.ts.serial_manager.preferred_port_index());
                         }
                         ui.separator();
                         for (i, port) in self.ts.serial_manager.port_display_names().iter().enumerate() {
@@ -440,6 +448,10 @@ impl eframe::App for App {
                         Ok(client_ctx) => {
                             self.ts.error_msg = None;
                             self.ts.client_window.init(&client_ctx);
+                            self.ts.initial_register_window.set_regs(&client_ctx.initial_state().regs, None);
+                            *self.ts.initial_register_window.open_mut() = true;
+                            *self.ts.final_register_window.open_mut() = false;
+                            self.ts.last_program_state = None;
                             self.ts.client_ctx = Some(client_ctx);
 
                             log::debug!(
@@ -486,18 +498,14 @@ impl eframe::App for App {
             }
 
             match &initial_state.regs {
-                RemoteCpuRegisters::V3(_regs) => {
+                RemoteCpuRegisters::V2(_) | RemoteCpuRegisters::V3(_) => {
                     self.ts.initial_register_window.show(
                         ctx,
                         CpuStateType::Initial,
-                        RegisterSetType::Intel386,
                         &mut self.ts.event_queue,
                     );
 
-                    let new_regs = self
-                        .ts
-                        .initial_register_window
-                        .regs(RegisterSetType::from(&initial_state.regs));
+                    let new_regs = self.ts.initial_register_window.regs();
 
                     new_state.regs = new_regs;
                     update_state = true;
@@ -514,7 +522,6 @@ impl eframe::App for App {
             self.ts.final_register_window.show(
                 ctx,
                 CpuStateType::Final,
-                RegisterSetType::Intel386,
                 &mut self.ts.event_queue,
             );
 
@@ -581,12 +588,11 @@ impl App {
                             }
                         }
 
-                        let mut initial_state = client_ctx.initial_state().clone();
-                        initial_state.regs.normalize();
+                        let load_regs = self.ts.initial_register_window.load_regs();
 
                         let mut buf = Cursor::new(Vec::<u8>::new());
 
-                        let mut regs = &initial_state.regs;
+                        let mut regs = &load_regs;
                         let regs_b;
 
                         if let Ok(ProgramState::StoreDoneSmm) = program_state {
@@ -684,7 +690,6 @@ impl App {
                                 MountAddress::CsIp => self
                                     .ts
                                     .initial_register_window
-                                    .regs(RegisterSetType::Intel386)
                                     .code_address(),
                             };
 
@@ -737,7 +742,6 @@ impl App {
                                 MountAddress::CsIp => self
                                     .ts
                                     .initial_register_window
-                                    .regs(RegisterSetType::Intel386)
                                     .code_address(),
                             };
 
@@ -788,19 +792,17 @@ impl App {
                         }
 
                         // Load registers.
-                        let mut initial_state = client_ctx.initial_state().clone();
-                        initial_state.regs.normalize();
+                        let load_regs = self.ts.initial_register_window.load_regs();
 
                         let mut buf = Cursor::new(Vec::<u8>::new());
 
-                        initial_state
-                            .regs
+                        load_regs
                             .write(&mut buf)
                             .expect("Failed to write registers to buffer");
 
                         if let Err(e) = client_ctx
                             .client
-                            .load_registers_from_buf(RegisterSetType::from(&initial_state.regs), buf.get_ref())
+                            .load_registers_from_buf(RegisterSetType::from(&load_regs), buf.get_ref())
                         {
                             self.gs
                                 .toasts

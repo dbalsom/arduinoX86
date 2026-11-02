@@ -38,6 +38,14 @@ impl SerialManager {
         self.ports = Self::enumerate_and_filter_ports();
     }
 
+    // Don't ignore 'unknown' ports, but prefer others first
+    pub fn preferred_port_index(&self) -> usize {
+        self.ports
+            .iter()
+            .position(|port| !matches!(port.port_type, SerialPortType::Unknown))
+            .unwrap_or(0)
+    }
+
     fn enumerate_and_filter_ports() -> Vec<SerialPortInfo> {
         serialport::available_ports()
             .unwrap_or_else(|_| vec![])
