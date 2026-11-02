@@ -591,16 +591,17 @@ void print_cpu_state() {
   DEBUG_SERIAL.print(buf);
 #endif  
 
-#if defined(CPU_286) 
-  char ice0_chr = READ_ICE_PIN0 ? '1' : '0';
-  char ice1_chr = READ_ICE_PIN1 ? '1' : '0';
-  snprintf(
-    buf, 
-    buf_len,
-    "C:%c%c ",
-    ice0_chr, ice1_chr
-  );
-  DEBUG_SERIAL.print(buf);
+#if defined(CPU_286)
+  // Die photography confirms the ICE pins aren't bonded, so sampling them is meaningless.
+  // char ice0_chr = READ_ICE_PIN0 ? '1' : '0';
+  // char ice1_chr = READ_ICE_PIN1 ? '1' : '0';
+  // snprintf(
+  //   buf,
+  //   buf_len,
+  //   "C:%c%c ",
+  //   ice0_chr, ice1_chr
+  // );
+  // DEBUG_SERIAL.print(buf);
 #endif
 
   debugPrintColor(Controller.getBusStatusColor(CPU.bus_state), Controller.getBusStatusString(CPU.bus_state));

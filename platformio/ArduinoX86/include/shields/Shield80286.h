@@ -104,10 +104,11 @@ void cycle();
 #define READ_S2_PIN READ_M_IO_PIN
 #define READ_C_I_PIN READ_PIN_D09
 
-#define ICE_PIN0 20
-#define ICE_PIN1 21
-#define READ_ICE_PIN0 READ_PIN_D20
-#define READ_ICE_PIN1 READ_PIN_D21
+// The ICE pins aren't bonded on this CPU, as confirmed by die photography.
+// #define ICE_PIN0 20
+// #define ICE_PIN1 21
+// #define READ_ICE_PIN0 READ_PIN_D20
+// #define READ_ICE_PIN1 READ_PIN_D21
 // ------------------------- 82288 status pins --------------------------------
 
 #define ALE_PIN 8
@@ -285,8 +286,9 @@ public:
 
     writeResetPinImpl(RESET_DEASSERT);
 
-    pinMode(ICE_PIN0, INPUT); // ICE pin 0
-    pinMode(ICE_PIN1, INPUT); // ICE pin 1
+    // The ICE pins aren't bonded; leave their GPIOs at the default input pulldown.
+    // pinMode(ICE_PIN0, INPUT); // ICE pin 0
+    // pinMode(ICE_PIN1, INPUT); // ICE pin 1
 
     // Pull up S0 and S1 pins.
     pinMode(S0_PIN, INPUT_PULLUP);
@@ -827,6 +829,6 @@ public:
 
   template<typename Board>
   void printPinStatesImpl(Board&) {
-    // The common trace already prints the 286's control and ICE pins.
+    // The common trace already prints the 286's control pins.
   }
 };
