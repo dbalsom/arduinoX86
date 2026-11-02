@@ -18,13 +18,16 @@
 // Only define one of these!
 //#define SHIELD_8088_V1
 //#define SHIELD_80186_3V_V1
-//#define SHIELD_286_5V_V1
-#define SHIELD_386EX_V1
+#define SHIELD_286_5V_V1
+//#define SHIELD_386EX_V1
 //#define SHIELD_386EX_V2
 
 #if (defined(SHIELD_8088_V1) + defined(SHIELD_80186_3V_V1) + defined(SHIELD_286_5V_V1) + defined(SHIELD_386EX_V1) + defined(SHIELD_386EX_V2)) != 1
   #error "You must define only one shield type!"
 #endif
+
+// If using 286 shield, specify whether you are using an 82284 clock generator chip.
+#define USE_82284
 
 // Baud rate is ignored for Arduino DUE as it uses native SerialUSB. This is legacy.
 // YOU SHOULD BE USING A DUE.

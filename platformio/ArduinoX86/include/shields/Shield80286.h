@@ -55,20 +55,25 @@ void cycle();
 #define LOAD_TIMEOUT 1000
 
 #define PRE_RESET_CYCLE_COUNT 5 // How many cycles to wait before asserting RESET. This gives time for pins to settle.
-// How many cycles to hold the RESET signal high. Intel says 18 cycles for the 80286. 
+// How many cycles to hold RESET asserted. Intel says 18 cycles for the 80286.
 #define RESET_HOLD_CYCLE_COUNT 20
-// How many cycles it takes to reset the CPU after RESET signal goes low. Intel says 38 cycles for the 80286. 
+// How many cycles it takes to reset the CPU after RESET is deasserted. Intel says 38 cycles for the 80286.
 // If we didn't see an ALE after this many cycles, give up
 #define RESET_CYCLE_TIMEOUT 40
-// What logic level RESET is when asserted
-#define RESET_ASSERT 1
-// What logic level RESET is when deasserted
-#define RESET_DEASSERT 0
+// Arduino pin levels; the 82284 inverts RESET when it is in the signal path.
+#ifdef USE_82284
+  #define RESET_ASSERT 0
+  #define RESET_DEASSERT 1
+#else
+  #define RESET_ASSERT 1
+  #define RESET_DEASSERT 0
+#endif
 
 // ------------------------- CPU Control pins ---------------------------------
 #define CLK_PIN 4
-#define RESET_PIN 5
-#define TEST_PIN 76  // A0
+//#define RESET_PIN 5
+#define RESET_PIN 77 // A1
+
 // -------------------------- CPU Input pins ----------------------------------
 // We use the analog pins for CPU inputs as they are not 5v tolerant.
 #define BHE_PIN 13
@@ -79,16 +84,16 @@ void cycle();
 
 #define READY_ASSERT 0
 #define READY_DEASSERT 1
-#define READY_PIN 76 // A1
+#define READY_PIN 76 // A0
 #define READ_READY_PIN (READ_PIN_D76)
 #define READ_READY_PIN_NORM (!READ_READY_PIN)
 
-#define READ_RESET_PIN READ_PIN_D05
+#define READ_RESET_PIN (digitalRead(RESET_PIN) == RESET_ASSERT)
 #define READ_NMI_PIN READ_PIN_D78
 #define READ_SMI_PIN 1
 #define READ_INTR_PIN READ_PIN_D79
 
-#define READ_TEST_PIN READ_PIN_A0
+#define READ_TEST_PIN 1 // !BUSY is tied to Vcc; A0 is READY, not TEST.
 #define READ_LOCK_PIN READ_PIN_D07 // Currently not connected
 
 #define S0_PIN 11
@@ -230,11 +235,10 @@ private:
   static constexpr int ADDRESS_LINES = 22;
   static constexpr int ADDRESS_DIGITS = 6; // 22 bits = 6 digits in hex
 
-  static constexpr std::array<int,6> OUTPUT_PINS = {
+  static constexpr std::array<int,5> OUTPUT_PINS = {
     4,  // CLK
-    5,  // RESET
+    RESET_PIN,
     76, // READY (A0)
-    77, // HOLD(?) (A1)
     78, // NMI (A2)
     79, // BUSY (A3)
   };
@@ -266,7 +270,7 @@ protected:
   
 public:
 
-  Hat80286(bool emulate_bus_controller = false) : emulate_bus_controller_(emulate_bus_controller) 
+  Shield80286(bool emulate_bus_controller = false) : emulate_bus_controller_(emulate_bus_controller)
     {}
 
   static void initPins() {
@@ -278,6 +282,8 @@ public:
     for (auto pin : INPUT_PINS) {
       pinMode(pin, INPUT_PULLDOWN);
     }
+
+    writeResetPinImpl(RESET_DEASSERT);
 
     pinMode(ICE_PIN0, INPUT); // ICE pin 0
     pinMode(ICE_PIN1, INPUT); // ICE pin 1
@@ -292,7 +298,6 @@ public:
 
     digitalWrite(7, HIGH);
 
-    digitalWrite(TEST_PIN, LOW);  // Make sure CPU does not see HOLD as high.
     digitalWrite(INTR_PIN, LOW);  // Must set these to a known value or risk spurious interrupts!
     digitalWrite(NMI_PIN, LOW);   // Must set these to a known value or risk spurious interrupts!
   }
@@ -371,7 +376,7 @@ public:
         break;
 
       case T2:
-        if (Hat80286::isTransferDoneImpl(latched_status)) {
+        if (Shield80286::isTransferDoneImpl(latched_status)) {
           return TI;
         } else {
   #if DEBUG_TSTATE
@@ -383,7 +388,7 @@ public:
 
       case TW:
         // Transition to TI if read/write signals are complete
-        if (Hat80286::isTransferDoneImpl(latched_status)) {
+        if (Shield80286::isTransferDoneImpl(latched_status)) {
           return TI;
         }
         break;
@@ -540,8 +545,8 @@ public:
     #endif
   }
 
-    /// Read the multiplexed address bus. Returns a 20-bit value.
-  uint32_t readAddressBus(bool peek = true) {
+  /// Read the address bus.
+  uint32_t readAddressBusImpl(bool peek = true) {
     // If we're not peeking, set the bus direction to input
     if (!peek) {
       setBusDirection(BusDirection::Input, ActiveBusWidth::Sixteen);
@@ -576,6 +581,21 @@ public:
     return address;
   }
 
+  static bool readPinImpl(OutputPin pin) {
+    switch (pin) {
+      case OutputPin::Ready:
+        return READ_READY_PIN_NORM;
+      case OutputPin::Test:
+        return READ_TEST_PIN;
+      case OutputPin::Intr:
+        return READ_INTR_PIN;
+      case OutputPin::Nmi:
+        return READ_NMI_PIN;
+      default:
+        return false;
+    }
+  }
+
   static void writePinImpl(OutputPin pin, bool value) {
     switch (pin) {
       case OutputPin::Ready:
@@ -584,7 +604,6 @@ public:
         break;
       case OutputPin::Test:
         // !BUSY is tied to Vcc, so we don't control it.
-        //WRITE_PIN_D05(value);
         break;
       case OutputPin::Intr:
         WRITE_PIN_A3(value);
@@ -609,7 +628,6 @@ public:
     result.queueStatus = false;
     result.busWidth = BusWidth::Sixteen; // 286 is always 16-bit bus width
     
-    digitalWrite(TEST_PIN, LOW);
     digitalWrite(INTR_PIN, LOW); // INTR must be low or CPU will immediately interrupt.
     digitalWrite(NMI_PIN, LOW); // NMI must be low or CPU will immediately interrupt.
 
@@ -624,7 +642,7 @@ public:
     // Assert RESET pin for hold count.
     for (int i = 0; i < RESET_HOLD_CYCLE_COUNT; i++) {
       // Write pin in loop to try to synchronize with CLK as best as we can.
-      WRITE_PIN_D05(1);
+      writeResetPinImpl(RESET_ASSERT);
       cycle();
     }
 
@@ -661,7 +679,7 @@ public:
     // Wait for ALE (S0 or S1 to go low) to indicate the CPU has reset.
     for ( int i = 0; i < RESET_CYCLE_TIMEOUT; i++ ) {
       // Deassert RESET pin to allow CPU to start.
-      WRITE_PIN_D05(0);
+      writeResetPinImpl(RESET_DEASSERT);
       cycle();
 
       s0 = READ_S0_PIN;
@@ -754,7 +772,7 @@ public:
   
   static void writeResetPinImpl(bool value) {
     // Write to the RESET pin
-    WRITE_PIN_D05(value);
+    digitalWrite(RESET_PIN, value ? HIGH : LOW);
   }
 
   uint8_t readCpuStatusLinesImpl() {
@@ -805,5 +823,10 @@ public:
     //control |= READ_PIN_D43 ? 0x04 : 0;     // MCE/PDEN - Pin 43
     //control |= READ_PIN_D44 ? 0x08 : 0;     // DEN      - Pin 44
     return control;
+  }
+
+  template<typename Board>
+  void printPinStatesImpl(Board&) {
+    // The common trace already prints the 286's control and ICE pins.
   }
 };
