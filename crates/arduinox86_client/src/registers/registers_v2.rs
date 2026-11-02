@@ -203,6 +203,9 @@ fn read_descriptor(slice: &[u8], index: usize) -> SegmentDescriptorV1 {
 
 impl Default for RemoteCpuRegistersV2 {
     fn default() -> Self {
+        // Match the Harris post-power-on STOREALL access bytes: FF for GDT/IDT/TSS, 7F for LDT.
+        // https://gist.github.com/dbalsom/8c7900adbf4d1405fc5ce5d5a521b0e9
+        let system_descriptor = SegmentDescriptorV1::default().with_d_type(0xF).with_s(1).with_dpl(3);
         RemoteCpuRegistersV2 {
             x0: 0,
             x1: 0,
@@ -235,17 +238,17 @@ impl Default for RemoteCpuRegistersV2 {
             cs_desc: SegmentDescriptorV1::default(),
             ss_desc: SegmentDescriptorV1::default(),
             ds_desc: SegmentDescriptorV1::default(),
-            gdt_desc: SegmentDescriptorV1::default(),
-            ldt_desc: SegmentDescriptorV1::default(),
-            idt_desc: SegmentDescriptorV1::default(),
-            tss_desc: SegmentDescriptorV1::default(),
+            gdt_desc: system_descriptor,
+            ldt_desc: system_descriptor.with_p(0),
+            idt_desc: system_descriptor,
+            tss_desc: system_descriptor,
         }
     }
 }
 
 impl RemoteCpuRegistersV2 {
     pub const FLAGS_RESERVED_SET: u16 = 0x0002; // Reserved bit in flags register, always set to 1.
-    pub const FLAGS_RESERVED_MASK: u16 = 0xFFD7; // Reserved bit in flags register, always cleared to 0.
+    pub const FLAGS_RESERVED_MASK: u16 = 0x7FD7; // Reserved bits 3, 5, and 15 are always cleared to 0.
 
     pub fn to_buffer<W: Write>(&self, buffer: &mut W) {
         buffer.write_all(&self.x0.to_le_bytes()).unwrap();
