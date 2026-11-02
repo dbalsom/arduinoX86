@@ -81,9 +81,7 @@ impl RegisterWindow {
             RegisterSetType::Intel386 | RegisterSetType::Intel386Smm => {
                 RemoteCpuRegisters::V3(self.control_v3.regs().clone())
             }
-            _ => {
-                unimplemented!("Unsupported register type for getting.");
-            }
+            _ => unimplemented!("Unsupported register type for getting."),
         }
     }
 
