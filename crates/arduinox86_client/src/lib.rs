@@ -299,13 +299,18 @@ impl ServerCpuType {
         }
     }
 
-    pub fn bus_chr_width(&self) -> usize {
+    /// Returns the CPU's address bus size in bits, defaulting to 20 if undetected.
+    pub fn address_bus_size(&self) -> usize {
         use ServerCpuType::*;
         match self {
-            Intel80286 => 6,
-            Intel80386 => 6,
-            _ => 5,
+            Undetected | Intel8088 | Intel8086 | NecV20 | NecV30 | Intel80188(_) | Intel80186(_) => 20,
+            Intel80286 => 24,
+            Intel80386 => 26, // The server currently supports the 386EX.
         }
+    }
+
+    pub fn bus_chr_width(&self) -> usize {
+        self.address_bus_size().div_ceil(4)
     }
 
     pub fn data_chr_width(&self) -> usize {
