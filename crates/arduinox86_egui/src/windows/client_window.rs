@@ -491,7 +491,8 @@ impl ClientWindow {
                     ui.horizontal(|ui| {
                         ui.label("Address latch:");
                         if let Some(server_status) = &self.server_status {
-                            ui.label(format!("{:08X}", server_status.address_latch));
+                            let address_digits = c_ctx.cpu_type.bus_chr_width();
+                            ui.label(format!("{:0address_digits$X}", server_status.address_latch));
                         }
                         else {
                             ui.label("0");
