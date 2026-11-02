@@ -141,9 +141,11 @@ void setup() {
   // Open the USB CDC serial port for in-band communication.
   // We run the client-server protocol over this port.
   INBAND_SERIAL.begin(BAUD_RATE);
-  // Wait for the serial port to be ready.
-  while (!INBAND_SERIAL)
-    ;
+
+  // Temporarily disabled: 
+  //wait for a host to open the USB serial connection.
+  // while (!INBAND_SERIAL)
+  //   ;
 
   // Board initialization sets up the debug serial port.
   Board.init();
@@ -2094,6 +2096,7 @@ void handle_execute_automatic() {
     else if (CPU.bus_cycle == WRITE_CYCLE) {
       // The CPU is reading from the I/O bus. Read from the bus emulator.
       CPU.data_bus = ArduinoX86::Bus->io_read_bus(CPU.address_latch(), !Controller.readBHEPin());
+      Controller.writeDataBus(CPU.data_bus, CPU.data_width);
     }
   }
 
