@@ -1145,6 +1145,13 @@ bool CommandServer<BoardType, ShieldType>::cmd_write_pin(void) {
   uint8_t pin_idx = commandBuffer_[0];
   uint8_t pin_val = commandBuffer_[1] & 0x01;
 
+#if defined(SHIELD_286_5V_V1)
+  if (pin_idx == 4) {
+    Controller.writePin(OutputPin::Error, pin_val);
+    return true;
+  }
+#endif
+
   if (pin_idx < 4) {
     //uint8_t pin_no = WRITE_PINS[pin_idx];
 
@@ -1194,6 +1201,12 @@ bool CommandServer<BoardType, ShieldType>::cmd_write_pin(void) {
 template<typename BoardType, typename ShieldType>
 bool CommandServer<BoardType, ShieldType>::cmd_read_pin(void) {
   uint8_t pin_idx = commandBuffer_[0];
+#if defined(SHIELD_286_5V_V1)
+  if (pin_idx == 4) {
+    proto_write(uint8_t(Controller.readPin(OutputPin::Error) ? 1 : 0));
+    return true;
+  }
+#endif
   bool value = false;
   bool state = true;
 

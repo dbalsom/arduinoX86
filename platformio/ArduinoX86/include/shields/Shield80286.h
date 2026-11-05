@@ -80,6 +80,9 @@ void cycle();
 
 #define NMI_PIN 78 // A2
 #define INTR_PIN 79 // A3
+#define BUSY_PIN 80 // A4
+#define ERROR_PIN 81 // A5
+#define READ_ERROR_PIN READ_PIN_D81
 #define READ_BHE_PIN READ_PIN_D13
 
 #define READY_ASSERT 0
@@ -93,8 +96,8 @@ void cycle();
 #define READ_SMI_PIN 1
 #define READ_INTR_PIN READ_PIN_D79
 
-#define READ_TEST_PIN 1 // !BUSY is tied to Vcc; A0 is READY, not TEST.
-#define READ_LOCK_PIN READ_PIN_D07 // Currently not connected
+#define READ_TEST_PIN READ_PIN_D80
+#define READ_LOCK_PIN READ_PIN_D07
 
 #define S0_PIN 11
 #define S1_PIN 12
@@ -236,12 +239,14 @@ private:
   static constexpr int ADDRESS_LINES = 22;
   static constexpr int ADDRESS_DIGITS = 6; // 22 bits = 6 digits in hex
 
-  static constexpr std::array<int,5> OUTPUT_PINS = {
+  static constexpr std::array<int,7> OUTPUT_PINS = {
     4,  // CLK
     RESET_PIN,
     76, // READY (A0)
     78, // NMI (A2)
-    79, // BUSY (A3)
+    79, // INTR (A3)
+    BUSY_PIN,
+    ERROR_PIN,
   };
 
   // All input pins, used to set pin direction on setup
@@ -275,6 +280,10 @@ public:
     {}
 
   static void initPins() {
+    // BUSY polarity is tested empirically; HIGH is the normal level.
+    digitalWrite(BUSY_PIN, HIGH);
+    digitalWrite(ERROR_PIN, HIGH);
+
     // Set initial pin modes for all output and input pins
     for (auto pin : OUTPUT_PINS) {
       pinMode(pin, OUTPUT);
@@ -589,6 +598,8 @@ public:
         return READ_READY_PIN_NORM;
       case OutputPin::Test:
         return READ_TEST_PIN;
+      case OutputPin::Error:
+        return READ_ERROR_PIN;
       case OutputPin::Intr:
         return READ_INTR_PIN;
       case OutputPin::Nmi:
@@ -605,7 +616,10 @@ public:
         WRITE_PIN_A0(!value);
         break;
       case OutputPin::Test:
-        // !BUSY is tied to Vcc, so we don't control it.
+        WRITE_PIN_A4(value);
+        break;
+      case OutputPin::Error:
+        WRITE_PIN_A5(value);
         break;
       case OutputPin::Intr:
         WRITE_PIN_A3(value);

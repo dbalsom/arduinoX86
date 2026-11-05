@@ -40,5 +40,6 @@ enum class OutputPin : uint8_t {
   Hold,
   Busy,
   Smi,
+  Error, // Optional shield-specific ERROR input; 286 wire protocol index4.
 };
 
