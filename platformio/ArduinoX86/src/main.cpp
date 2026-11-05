@@ -1939,8 +1939,8 @@ void handle_execute_state() {
     ArduinoX86::Bus->mem_write_bus(CPU.address_latch(), CPU.data_bus, !Controller.readBHEPin());
   }
 
-  if (cpu_mrdc && CPU.bus_cycle == T1) {
-    // CPU is reading from memory. Resolve from the bus emulator on T1 - the client can override this if desired.
+  if (CPU.bus_cycle == T1 && (CPU.bus_state == CODE || CPU.bus_state == MEMR)) {
+    // Resolve the latched read request on T1. MRDC is asserted later (T2 on the 286)
     if (ArduinoX86::Server.get_flags() & CommandServer<BoardType, ShieldType>::FLAG_RESOLVE_BUS_STEP) {
       CPU.data_bus = ArduinoX86::Bus->mem_read_bus(CPU.address_latch(), !Controller.readBHEPin(), false);
       Controller.getBoard().debugPrintf(
