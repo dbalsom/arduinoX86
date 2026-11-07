@@ -38,6 +38,7 @@ use std::{
     io::{Read, Write},
     rc::Rc,
     str,
+    time::Duration,
 };
 
 use serialport::{ClearBuffer, SerialPort};
@@ -668,12 +669,16 @@ impl Display for BusState {
 }
 
 /// [CpuPin] represents the miscellaneous CPU pins that can be read or written to.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum CpuPin {
+    /// Logical READY: true means asserted, regardless of the physical pin's polarity.
+    /// Shields invert active-low READY# pins for both reads and writes.
     READY = 0,
     TEST,
     INTR,
     NMI,
+    // Wire index 4 is reserved for the 286 shield's ERROR input.
+    HOLD = 5,
 }
 
 pub const REQUIRED_PROTOCOL_VER: u8 = 3;
@@ -730,6 +735,8 @@ pub enum CpuClientError {
     ReadFailure,
     #[error("Failed to write to serial port.")]
     WriteFailure,
+    #[error("Failed to configure serial port: {0}")]
+    ConfigurePort(serialport::Error),
     #[error("Type conversion failed.")]
     TypeConversionError,
     #[error("{0:?} command received invalid value from server.")]
@@ -788,6 +795,12 @@ impl CpuClient {
                 Err(CpuClientError::EnumerationError)
             }
         }
+    }
+
+    /// The configured host port rate. Native USB connections use zero since
+    /// their transport is not clocked by a UART baud rate.
+    pub fn baud_rate(&self) -> serialport::Result<u32> {
+        self.port.borrow().baud_rate()
     }
 
     /// Try to open the specified serial port and query it for an Arduino808X server.
@@ -944,21 +957,13 @@ impl CpuClient {
 
     /// Server command - Load
     /// Load the specified register state into the CPU.
-    /// This command takes 28 bytes, which correspond to the word values of each of the 14
-    /// CPU registers.
-    /// Registers should be loaded in the following order, little-endian:
-    ///
-    /// AX, BX, CX, DX, SS, SP, FLAGS, IP, CS, DS, ES, BP, SI, DI
+    /// The buffer layout and size depend on `reg_type`. The server replies only
+    /// after resetting the CPU and executing its register-loading program.
     pub fn load_registers_from_buf(
         &mut self,
         reg_type: RegisterSetType,
         reg_data: &[u8],
     ) -> Result<bool, CpuClientError> {
-        self.send_command_byte(ServerCommand::CmdLoad)?;
-        let mut buf: [u8; 1] = [0; 1];
-        buf[0] = reg_type.into();
-        self.send_buf(&buf)?;
-
         let expected_buf_size = reg_type.size();
         if reg_data.len() < expected_buf_size {
             return Err(CpuClientError::BadParameter(format!(
@@ -968,8 +973,40 @@ impl CpuClient {
             )));
         }
 
-        self.send_buf(&reg_data[0..expected_buf_size])?;
-        self.read_result_code(ServerCommand::CmdLoad)
+        if matches!(reg_type, RegisterSetType::Intel286) {
+            // Older 286 firmware does not restore READY during reset. A manual
+            // wait state must not stall the reset/LOADALL program itself.
+            self.write_pin(CpuPin::READY, true)?;
+        }
+
+        // With cycle tracing enabled, even the firmware's load-timeout reply
+        // takes longer than the normal one-second serial timeout. Keep this
+        // allowance local to LOAD so polling remains responsive.
+        let previous_timeout = self.port.borrow().timeout();
+        self.port
+            .borrow_mut()
+            .set_timeout(previous_timeout.max(Duration::from_secs(5)))
+            .map_err(CpuClientError::ConfigurePort)?;
+        let result = (|| {
+            self.send_command_byte(ServerCommand::CmdLoad)?;
+            self.send_buf(&[reg_type.into()])?;
+            self.send_buf(&reg_data[..expected_buf_size])?;
+            self.read_result_code(ServerCommand::CmdLoad)
+        })();
+        let restored = self
+            .port
+            .borrow_mut()
+            .set_timeout(previous_timeout)
+            .map_err(CpuClientError::ConfigurePort);
+        match result {
+            Ok(success) => restored.map(|()| success),
+            Err(error) => {
+                if let Err(restore_error) = restored {
+                    log::error!("Failed to restore timeout after register load: {}", restore_error);
+                }
+                Err(error)
+            }
+        }
     }
 
     pub fn begin_store(&mut self) -> Result<bool, CpuClientError> {
@@ -1321,6 +1358,7 @@ impl CpuClient {
         let data_size = u32::from_le_bytes([param_buf[4], param_buf[5], param_buf[6], param_buf[7]]);
 
         if cycle_count == 0 {
+            self.read_result_code(ServerCommand::CmdGetCycleStates)?;
             return Ok(Vec::new());
         }
 
