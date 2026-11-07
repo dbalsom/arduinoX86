@@ -59,7 +59,7 @@
 #define STORE_INDICATOR (SILENT_MODE)
 
 #define TRACE_ALL 0 // TRACE_ALL will enable all traces (TRACE_NONE overrides)
-#define TRACE_NONE (0 | SILENT_MODE) // TRACE_NONE will override all set traces
+#define TRACE_NONE (1 | SILENT_MODE) // TRACE_NONE will override all set traces
 
 // These defines control tracing and debugging output for each state.
 // Note: tracing a STORE operation will likely cause it to timeout on the client.

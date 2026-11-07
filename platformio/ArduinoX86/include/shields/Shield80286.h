@@ -612,8 +612,8 @@ public:
   static void writePinImpl(OutputPin pin, bool value) {
     switch (pin) {
       case OutputPin::Ready:
-        // READY is active-low on 286.
-        WRITE_PIN_A0(!value);
+        // The client uses logical READY; the CPU has an active-low READY# pin.
+        WRITE_PIN_A0(value ? READY_ASSERT : READY_DEASSERT);
         break;
       case OutputPin::Test:
         WRITE_PIN_A4(value);
@@ -646,6 +646,8 @@ public:
     
     digitalWrite(INTR_PIN, LOW); // INTR must be low or CPU will immediately interrupt.
     digitalWrite(NMI_PIN, LOW); // NMI must be low or CPU will immediately interrupt.
+    // Release any manually inserted wait state before reset and LOADALL.
+    digitalWrite(READY_PIN, READY_ASSERT);
 
     bool ale = false;
     //bool bhe_went_off = false;

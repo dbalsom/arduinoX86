@@ -1145,68 +1145,58 @@ bool CommandServer<BoardType, ShieldType>::cmd_write_pin(void) {
   uint8_t pin_idx = commandBuffer_[0];
   uint8_t pin_val = commandBuffer_[1] & 0x01;
 
-#if defined(SHIELD_286_5V_V1)
-  if (pin_idx == 4) {
-    Controller.writePin(OutputPin::Error, pin_val);
-    return true;
-  }
+  switch (pin_idx) {
+    case 0: // READY pin
+    {
+      controller_.getBoard().debugPrintf(DebugType::CMD, false, "cmd_write_pin(): Setting READY pin to: %d\n\r", pin_val);
+      Controller.writePin(OutputPin::Ready, pin_val);
+
+      bool new_value = Controller.readPin(OutputPin::Ready);
+      controller_.getBoard().debugPrintf(DebugType::CMD, false, "cmd_write_pin(): READY pin now reads as: %d\n\r", new_value ? 1 : 0);
+      if (new_value != (pin_val != 0)) {
+        controller_.getBoard().debugPrintln(DebugType::ERROR, "cmd_write_pin(): WARNING: READY pin readback does not match written value!");
+      }
+      break;
+    }
+    case 1: // TEST pin
+      controller_.getBoard().debugPrintf(DebugType::CMD, false, "cmd_write_pin(): Setting TEST pin to: %d\n\r", pin_val);
+      Controller.writePin(OutputPin::Test, pin_val);
+      break;
+
+    case 2: // INTR pin
+      controller_.getBoard().debugPrintf(DebugType::CMD, false, "cmd_write_pin(): Setting INTR pin to: %d\n\r", pin_val);
+      Controller.writePin(OutputPin::Intr, pin_val);
+      break;
+
+    case 3: // NMI pin
+      controller_.getBoard().debugPrintf(DebugType::CMD, false, "cmd_write_pin(): Setting NMI pin to: %d\n\r", pin_val);
+      Controller.writePin(OutputPin::Nmi, pin_val);
+      break;
+
+#if defined(ERROR_PIN)
+    case 4: // ERROR pin
+      Controller.writePin(OutputPin::Error, pin_val);
+      break;
 #endif
 
-  if (pin_idx < 4) {
-    //uint8_t pin_no = WRITE_PINS[pin_idx];
+#if defined(HOLD_PIN)
+    case 5: // HOLD pin
+      Controller.writePin(OutputPin::Hold, pin_val);
+      break;
+#endif
 
-    switch (pin_idx) {
-      case 0: // READY pin
-      {
-        controller_.getBoard().debugPrintf(DebugType::CMD, false, "cmd_write_pin(): Setting READY pin to: %d\n\r", pin_val);
-        Controller.writePin(OutputPin::Ready, pin_val);
-
-        bool new_value = Controller.readPin(OutputPin::Ready);
-        controller_.getBoard().debugPrintf(DebugType::CMD, false, "cmd_write_pin(): READY pin now reads as: %d\n\r", new_value ? 1 : 0);
-        if (new_value != (pin_val != 0)) {
-          controller_.getBoard().debugPrintln(DebugType::ERROR, "cmd_write_pin(): WARNING: READY pin readback does not match written value!");
-        }
-        break;
-      }
-      case 1: // TEST pin
-        controller_.getBoard().debugPrintf(DebugType::CMD, false, "cmd_write_pin(): Setting TEST pin to: %d\n\r", pin_val);
-        Controller.writePin(OutputPin::Test, pin_val);
-        break;
-
-      case 2: // INTR pin
-        controller_.getBoard().debugPrintf(DebugType::CMD, false, "cmd_write_pin(): Setting INTR pin to: %d\n\r", pin_val);
-        Controller.writePin(OutputPin::Intr, pin_val);
-        break;
-
-      case 3: // NMI pin
-        controller_.getBoard().debugPrintf(DebugType::CMD, false, "cmd_write_pin(): Setting NMI pin to: %d\n\r", pin_val);
-        Controller.writePin(OutputPin::Nmi, pin_val);
-        break;
-
-      default:
-        error_beep();
-        return false;
-    }
-    return true;
-  } 
-  else {
-    // Invalid pin
-    Controller.getBoard().debugPrintln(DebugType::ERROR, "cmd_write_pin(): Invalid pin index");
-    error_beep();
-    return false;
+    default:
+      Controller.getBoard().debugPrintln(DebugType::ERROR, "cmd_write_pin(): Invalid pin index");
+      error_beep();
+      return false;
   }
+  return true;
 }
 
 // Server command - Read pin
 template<typename BoardType, typename ShieldType>
 bool CommandServer<BoardType, ShieldType>::cmd_read_pin(void) {
   uint8_t pin_idx = commandBuffer_[0];
-#if defined(SHIELD_286_5V_V1)
-  if (pin_idx == 4) {
-    proto_write(uint8_t(Controller.readPin(OutputPin::Error) ? 1 : 0));
-    return true;
-  }
-#endif
   bool value = false;
   bool state = true;
 
@@ -1227,6 +1217,18 @@ bool CommandServer<BoardType, ShieldType>::cmd_read_pin(void) {
     case 3: // NMI pin
       value = Controller.readPin(OutputPin::Nmi);
       break;
+
+#if defined(ERROR_PIN)
+    case 4: // ERROR pin
+      value = Controller.readPin(OutputPin::Error);
+      break;
+#endif
+
+#if defined(HOLD_PIN)
+    case 5: // HOLD pin
+      value = Controller.readPin(OutputPin::Hold);
+      break;
+#endif
 
     default:
       Controller.getBoard().debugPrintln(DebugType::ERROR, "cmd_read_pin(): Invalid pin index");
