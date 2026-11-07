@@ -37,6 +37,7 @@ mod register_state;
 mod resource_manager;
 mod scheduler;
 mod serial_manager;
+mod serial_worker;
 mod structs;
 mod style;
 mod thread_event;

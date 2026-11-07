@@ -80,9 +80,12 @@ impl MemoryViewer {
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
                         if ui
-                            .button(
-                                egui::RichText::new(format!("{}", egui_phosphor::regular::DOWNLOAD_SIMPLE))
-                                    .size(self.icon_size),
+                            .add_enabled(
+                                !c_ctx.busy,
+                                egui::Button::new(
+                                    egui::RichText::new(format!("{}", egui_phosphor::regular::DOWNLOAD_SIMPLE))
+                                        .size(self.icon_size),
+                                ),
                             )
                             .on_hover_text("Download Memory")
                             .clicked()

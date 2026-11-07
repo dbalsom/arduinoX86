@@ -23,3 +23,4 @@
 
 pub mod cycle_display;
 pub mod mount_address_widget;
+pub mod serial_status_bar;

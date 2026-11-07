@@ -29,13 +29,11 @@ pub struct SerialManager {
 
 impl SerialManager {
     pub fn new() -> Self {
-        SerialManager {
-            ports: Self::enumerate_and_filter_ports(),
-        }
+        Self::default()
     }
 
-    pub fn refresh(&mut self) {
-        self.ports = Self::enumerate_and_filter_ports();
+    pub fn set_ports(&mut self, ports: Vec<SerialPortInfo>) {
+        self.ports = ports;
     }
 
     // Don't ignore 'unknown' ports, but prefer others first
@@ -46,7 +44,7 @@ impl SerialManager {
             .unwrap_or(0)
     }
 
-    fn enumerate_and_filter_ports() -> Vec<SerialPortInfo> {
+    pub fn enumerate_and_filter_ports() -> Vec<SerialPortInfo> {
         serialport::available_ports()
             .unwrap_or_else(|_| vec![])
             .into_iter()

@@ -22,6 +22,7 @@
 */
 
 pub mod canvas;
+pub mod cpu_inputs;
 pub mod cycle_table;
 pub mod data_table;
 pub mod data_visualizer;

@@ -77,14 +77,18 @@ impl BinaryView {
         &mut self,
         ui: &mut egui::Ui,
         blob: &mut BinaryBlob,
-        _c_ctx: &mut ClientContext,
+        c_ctx: &mut ClientContext,
         events: &mut GuiEventQueue,
     ) {
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 if ui
-                    .button(
-                        egui::RichText::new(format!("{}", egui_phosphor::regular::BOX_ARROW_UP)).size(self.icon_size),
+                    .add_enabled(
+                        !c_ctx.busy,
+                        egui::Button::new(
+                            egui::RichText::new(format!("{}", egui_phosphor::regular::BOX_ARROW_UP))
+                                .size(self.icon_size),
+                        ),
                     )
                     .on_hover_text("Load binary")
                     .clicked()

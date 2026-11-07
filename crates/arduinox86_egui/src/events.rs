@@ -21,6 +21,7 @@
     DEALINGS IN THE SOFTWARE.
 */
 use crate::enums::{FileOpenContext, FileSaveContext, MountAddress};
+use arduinox86_client::CpuPin;
 use std::path::PathBuf;
 
 #[derive(PartialEq, Eq)]
@@ -33,6 +34,17 @@ pub enum GuiEvent {
         size:    u32,
     },
     RunProgram,
+    Step,
+    Disconnect,
+    SetFlag {
+        flag:    u32,
+        enabled: bool,
+    },
+    WritePin {
+        pin:   CpuPin,
+        value: bool,
+    },
+    WriteDataBus(u16),
     AssembleProgram {
         program_name: String,
     },
