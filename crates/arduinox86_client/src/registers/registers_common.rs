@@ -153,10 +153,12 @@ impl RemoteCpuRegisters {
                 regs.write_buf(&mut buf);
                 writer.write_all(&buf[0..28])
             }
-            // RemoteCpuRegisters::V2(regs) => {
-            //     regs.write_buf(&mut buf);
-            //     writer.write_all(&buf[0..102])
-            // }
+            RemoteCpuRegisters::V2(regs) => regs.write_le(writer).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Failed to write RemoteCpuRegistersV2: {}", e),
+                )
+            }),
             RemoteCpuRegisters::V3(RemoteCpuRegistersV3::A(regs)) => regs.write_le(writer).map_err(|e| {
                 std::io::Error::new(
                     std::io::ErrorKind::Other,
@@ -169,9 +171,6 @@ impl RemoteCpuRegisters {
                     format!("Failed to write RemoteCpuRegistersV3B: {}", e),
                 )
             }),
-            _ => {
-                unimplemented!("Need V2 write_buf() implementation");
-            }
         }
     }
 }

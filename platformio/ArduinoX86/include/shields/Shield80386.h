@@ -542,8 +542,10 @@ public:
 
   static bool readPinImpl(OutputPin pin) {
     switch (pin) {
+      case OutputPin::Hold:
+        return digitalRead(HOLD_PIN) != LOW;
       case OutputPin::Ready:
-        return READ_READY_PIN;
+        return READ_READY_PIN_NORM;
         break;
       case OutputPin::Test:
         // !BUSY is tied to Vcc, so we don't control it.
@@ -568,8 +570,12 @@ public:
 
   static void writePinImpl(OutputPin pin, bool value) {
     switch (pin) {
+      case OutputPin::Hold:
+        digitalWrite(HOLD_PIN, value ? HIGH : LOW);
+        break;
       case OutputPin::Ready:
-        WRITE_READY_PIN(value);
+        // The client uses logical READY; the CPU has an active-low READY# pin.
+        WRITE_READY_PIN(value ? READY_ASSERT : READY_DEASSERT);
         break;
       case OutputPin::Test:
         // !BUSY is tied to Vcc, so we don't control it.

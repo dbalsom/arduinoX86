@@ -31,14 +31,19 @@
 void ale_interrupt_handler() {
   DEBUG_SERIAL.println(">ADS");
 
+  // The 386EX coprocessor handshake requires its dedicated READYO signal.
+  #ifdef READYO_PIN
   if (READ_ABUS_23 &&!READ_M_IO_PIN) {
     DEBUG_SERIAL.println(">NPX");
     WRITE_READY_PIN(READY_DEASSERT);
   }
+  #endif
 }
 
 void readyo_interrupt_handler() {
+  #ifdef READYO_PIN
   WRITE_READY_PIN(READY_ASSERT);
+  #endif
 }
 
 void cycle_edge_interrupt_handler() {

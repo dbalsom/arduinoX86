@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <assert.h>
-#include <Arduino.h>
+#include <cstddef>
 
 #ifdef ARDUINO_GIGA
   #include <SDRAM.h>

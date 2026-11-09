@@ -55,11 +55,15 @@ public:
       if (enabled) {
         board.debugPrintln(DebugType::EMIT, "BoardController: Enabling ALE interrupt");
         attachInterrupt(digitalPinToInterrupt(ALE_PIN), ale_interrupt_handler, ALE_TRIGGER);
+        #ifdef READYO_PIN
         attachInterrupt(digitalPinToInterrupt(READYO_PIN), readyo_interrupt_handler, FALLING);
+        #endif
         attachInterrupt(digitalPinToInterrupt(CLK_PIN), cycle_edge_interrupt_handler, RISING);
       } else {
         detachInterrupt(digitalPinToInterrupt(ALE_PIN));
+        #ifdef READYO_PIN
         detachInterrupt(digitalPinToInterrupt(READYO_PIN));
+        #endif
         detachInterrupt(digitalPinToInterrupt(CLK_PIN));
       }
     }

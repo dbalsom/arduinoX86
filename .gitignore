@@ -42,13 +42,18 @@ shields/**/*.zip
 shields/808x/kicad/ard8088.wrl
 
 # 286 HAT
-shields/286_5V/kicad/gerbers
-shields/286_5V/kicad/arduino_286_5v-backups
-shields/286_5V/kicad/arduino*bak
-shields/286_5V/kicad/Package_LCC.pretty/*
-!shields/286_5V/kicad/Package_LCC.pretty/286-plcc.pretty
-shields/286_V3/kicad/Package_LCC.pretty/*
-!shields/286_V3/kicad/Package_LCC.pretty/286-plcc.pretty
+#shields/286_5V/kicad/gerbers
+#shields/286_5V/kicad/arduino_286_5v-backups
+#shields/286_5V/kicad/arduino*bak
+#shields/286_5V/kicad/Package_LCC.pretty/*
+#!shields/286_5V/kicad/Package_LCC.pretty/286-plcc.pretty
+#shields/286_V3/kicad/Package_LCC.pretty/*
+#!shields/286_V3/kicad/Package_LCC.pretty/286-plcc.pretty
+
+shields/286_5V
+shields/286_V3
+shields/286_V4
+shields/286_V4B
 
 # 386EX HAT
 shields/386EX/kicad/gerbers
@@ -90,3 +95,9 @@ platformio/ArduinoX86/asm/*.lst
 
 /shields/286_V3.zip
 /shields/386EX_V4_C*
+
+
+breadboards/fritzing_parts/backups
+breadboards/fritzing_parts/source 
+breadboards/fritzing_parts/previews
+

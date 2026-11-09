@@ -53,6 +53,7 @@ impl RegisterControlV3 {
         }
         else {
             self.reg_strings = RegisterStringStateV3::from(&self.regs);
+            self.final_regs = None;
         }
     }
 
@@ -106,7 +107,9 @@ impl RegisterControlV3 {
                 Self::show_flagbit_mut(ui, &mut self.reg_strings.flags.o_fl.text, updated, "O", "Overflow");
                 Self::show_flagbit_mut(ui, &mut self.reg_strings.flags.d_fl.text, updated, "D", "Direction");
                 Self::show_flagbit_mut(ui, &mut self.reg_strings.flags.i_fl.text, updated, "I", "Interrupt enable");
-                Self::show_flagbit_mut(ui, &mut self.reg_strings.flags.t_fl.text, updated, "T", "Trap");
+                ui.add_enabled_ui(false, |ui| {
+                    Self::show_flagbit_mut(ui, &mut self.reg_strings.flags.t_fl.text, updated, "T", "TF is controlled by Execution mode.");
+                });
                 Self::show_flagbit_mut(ui, &mut self.reg_strings.flags.s_fl.text, updated, "S", "Sign");
                 Self::show_flagbit_mut(ui, &mut self.reg_strings.flags.z_fl.text, updated, "Z", "Zero");
                 Self::show_flagbit_mut(ui, &mut self.reg_strings.flags.a_fl.text, updated, "A", "Auxiliary carry");

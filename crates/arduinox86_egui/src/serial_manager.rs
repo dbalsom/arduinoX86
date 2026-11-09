@@ -29,16 +29,22 @@ pub struct SerialManager {
 
 impl SerialManager {
     pub fn new() -> Self {
-        SerialManager {
-            ports: Self::enumerate_and_filter_ports(),
-        }
+        Self::default()
     }
 
-    pub fn refresh(&mut self) {
-        self.ports = Self::enumerate_and_filter_ports();
+    pub fn set_ports(&mut self, ports: Vec<SerialPortInfo>) {
+        self.ports = ports;
     }
 
-    fn enumerate_and_filter_ports() -> Vec<SerialPortInfo> {
+    // Don't ignore 'unknown' ports, but prefer others first
+    pub fn preferred_port_index(&self) -> usize {
+        self.ports
+            .iter()
+            .position(|port| !matches!(port.port_type, SerialPortType::Unknown))
+            .unwrap_or(0)
+    }
+
+    pub fn enumerate_and_filter_ports() -> Vec<SerialPortInfo> {
         serialport::available_ports()
             .unwrap_or_else(|_| vec![])
             .into_iter()

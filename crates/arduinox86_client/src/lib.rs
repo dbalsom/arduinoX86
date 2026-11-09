@@ -25,6 +25,7 @@
 mod commands;
 mod cycle_state;
 mod registers;
+pub mod trap;
 
 use binrw::BinReaderExt;
 use log;
@@ -38,6 +39,7 @@ use std::{
     io::{Read, Write},
     rc::Rc,
     str,
+    time::Duration,
 };
 
 use serialport::{ClearBuffer, SerialPort};
@@ -50,6 +52,16 @@ pub use register_printer::*;
 pub use registers::*;
 
 pub struct ServerFlags;
+
+/// Supported server features, queried once when a client connects.
+/// These describe available functionality; ServerFlags select runtime options.
+pub struct ServerCapabilities;
+
+impl ServerCapabilities {
+    /// 286 trap execution, including resumable STOREALL captures between steps.
+    pub const TRAP_EXECUTION_286: u32 = 0x0000_0001;
+    pub const SERVER_TRAP_HANDLER_286: u32 = 0x0000_0002;
+}
 
 #[derive(Copy, Clone, Debug)]
 pub enum MemoryStrategy {
@@ -70,6 +82,7 @@ impl ServerFlags {
     pub const ENABLE_CYCLE_LOGGING: u32 = 0x0000_0080; // Enable cycle logging
     pub const ENABLE_ALE_INTERRUPT: u32 = 0x0000_0100; // Enable ALE interrupt to arbitrate READY line
     pub const RESOLVE_BUS_STEP: u32     = 0x0000_0200; // Resolve bus step on each cycle
+    pub const ENABLE_TRAP_EXECUTION: u32 = 0x0000_0400; // 286 TF execution (requires TRAP_EXECUTION_286 capability)
 }
 
 /// [ServerCommand] represents the commands that can be sent to the Arduino808X server.
@@ -117,6 +130,13 @@ pub enum ServerCommand {
     CmdClearCycleLog = 0x27,
     CmdSetProgramBounds = 0x28,
     CmdSetJumpHint = 0x29,
+    CmdStepInstruction = 0x2A,
+    CmdGetInstructionState = 0x2B,
+    CmdSetTrapEndpoint = 0x2C,
+    CmdContinueTrap = 0x2D,
+    CmdGetTrapCapture = 0x2E,
+    CmdCapabilities = 0x2F,
+    CmdSetRealModeTrapHandler = 0x30,
     CmdInvalid,
 }
 
@@ -299,13 +319,18 @@ impl ServerCpuType {
         }
     }
 
-    pub fn bus_chr_width(&self) -> usize {
+    /// Returns the CPU's address bus size in bits, defaulting to 20 if undetected.
+    pub fn address_bus_size(&self) -> usize {
         use ServerCpuType::*;
         match self {
-            Intel80286 => 6,
-            Intel80386 => 6,
-            _ => 5,
+            Undetected | Intel8088 | Intel8086 | NecV20 | NecV30 | Intel80188(_) | Intel80186(_) => 20,
+            Intel80286 => 24,
+            Intel80386 => 26, // The server currently supports the 386EX.
         }
+    }
+
+    pub fn bus_chr_width(&self) -> usize {
+        self.address_bus_size().div_ceil(4)
     }
 
     pub fn data_chr_width(&self) -> usize {
@@ -573,6 +598,8 @@ pub enum ProgramState {
     StoreAll,
     Shutdown,
     Error,
+    TrapStoreDone,
+    IceRecovery286,
 }
 
 /// Convert a raw u8 value received from the Arduino808X server to a [ProgramState].
@@ -600,6 +627,8 @@ impl TryFrom<u8> for ProgramState {
             0x11 => Ok(ProgramState::StoreAll),
             0x12 => Ok(ProgramState::Shutdown),
             0x13 => Ok(ProgramState::Error),
+            0x14 => Ok(ProgramState::TrapStoreDone),
+            0x15 => Ok(ProgramState::IceRecovery286),
             _ => Err(CpuClientError::TypeConversionError),
         }
     }
@@ -663,12 +692,16 @@ impl Display for BusState {
 }
 
 /// [CpuPin] represents the miscellaneous CPU pins that can be read or written to.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum CpuPin {
+    /// Logical READY: true means asserted, regardless of the physical pin's polarity.
+    /// Shields invert active-low READY# pins for both reads and writes.
     READY = 0,
     TEST,
     INTR,
     NMI,
+    // Wire index 4 is reserved for the 286 shield's ERROR input.
+    HOLD = 5,
 }
 
 pub const REQUIRED_PROTOCOL_VER: u8 = 3;
@@ -725,6 +758,8 @@ pub enum CpuClientError {
     ReadFailure,
     #[error("Failed to write to serial port.")]
     WriteFailure,
+    #[error("Failed to configure serial port: {0}")]
+    ConfigurePort(serialport::Error),
     #[error("Type conversion failed.")]
     TypeConversionError,
     #[error("{0:?} command received invalid value from server.")]
@@ -744,6 +779,7 @@ pub enum CpuClientError {
 /// A [CpuClient] represents a connection to an `ArduinoX86` server over a serial port.
 pub struct CpuClient {
     port: Rc<RefCell<Box<dyn serialport::SerialPort>>>,
+    capabilities: u32,
 }
 
 impl CpuClient {
@@ -760,9 +796,12 @@ impl CpuClient {
                     }
                     println!("Trying port: {}", port.port_name);
                     if let Some(rtk_port) = CpuClient::try_port(port, timeout.unwrap_or(1000)) {
-                        return Ok(CpuClient {
+                        let mut client = CpuClient {
                             port: Rc::new(RefCell::new(rtk_port)),
-                        });
+                            capabilities: 0,
+                        };
+                        client.capabilities = client.query_capabilities()?;
+                        return Ok(client);
                     }
                 }
 
@@ -783,6 +822,27 @@ impl CpuClient {
                 Err(CpuClientError::EnumerationError)
             }
         }
+    }
+
+    /// The configured host port rate. Native USB connections use zero since
+    /// their transport is not clocked by a UART baud rate.
+    pub fn baud_rate(&self) -> serialport::Result<u32> {
+        self.port.borrow().baud_rate()
+    }
+
+    /// Server features discovered at connection time.
+    pub fn capabilities(&self) -> u32 {
+        self.capabilities
+    }
+
+    fn query_capabilities(&mut self) -> Result<u32, CpuClientError> {
+        let command = ServerCommand::CmdCapabilities;
+        let mut bytes = [0; 4];
+        self.send_command_byte(command)?;
+        self.read_result_code(command)?;
+        self.recv_buf(&mut bytes)?;
+        self.read_result_code(command)?;
+        Ok(u32::from_le_bytes(bytes))
     }
 
     /// Try to open the specified serial port and query it for an Arduino808X server.
@@ -939,21 +999,13 @@ impl CpuClient {
 
     /// Server command - Load
     /// Load the specified register state into the CPU.
-    /// This command takes 28 bytes, which correspond to the word values of each of the 14
-    /// CPU registers.
-    /// Registers should be loaded in the following order, little-endian:
-    ///
-    /// AX, BX, CX, DX, SS, SP, FLAGS, IP, CS, DS, ES, BP, SI, DI
+    /// The buffer layout and size depend on `reg_type`. The server replies only
+    /// after resetting the CPU and executing its register-loading program.
     pub fn load_registers_from_buf(
         &mut self,
         reg_type: RegisterSetType,
         reg_data: &[u8],
     ) -> Result<bool, CpuClientError> {
-        self.send_command_byte(ServerCommand::CmdLoad)?;
-        let mut buf: [u8; 1] = [0; 1];
-        buf[0] = reg_type.into();
-        self.send_buf(&buf)?;
-
         let expected_buf_size = reg_type.size();
         if reg_data.len() < expected_buf_size {
             return Err(CpuClientError::BadParameter(format!(
@@ -963,8 +1015,40 @@ impl CpuClient {
             )));
         }
 
-        self.send_buf(&reg_data[0..expected_buf_size])?;
-        self.read_result_code(ServerCommand::CmdLoad)
+        if matches!(reg_type, RegisterSetType::Intel286) {
+            // Older 286 firmware does not restore READY during reset. A manual
+            // wait state must not stall the reset/LOADALL program itself.
+            self.write_pin(CpuPin::READY, true)?;
+        }
+
+        // With cycle tracing enabled, even the firmware's load-timeout reply
+        // takes longer than the normal one-second serial timeout. Keep this
+        // allowance local to LOAD so polling remains responsive.
+        let previous_timeout = self.port.borrow().timeout();
+        self.port
+            .borrow_mut()
+            .set_timeout(previous_timeout.max(Duration::from_secs(5)))
+            .map_err(CpuClientError::ConfigurePort)?;
+        let result = (|| {
+            self.send_command_byte(ServerCommand::CmdLoad)?;
+            self.send_buf(&[reg_type.into()])?;
+            self.send_buf(&reg_data[..expected_buf_size])?;
+            self.read_result_code(ServerCommand::CmdLoad)
+        })();
+        let restored = self
+            .port
+            .borrow_mut()
+            .set_timeout(previous_timeout)
+            .map_err(CpuClientError::ConfigurePort);
+        match result {
+            Ok(success) => restored.map(|()| success),
+            Err(error) => {
+                if let Err(restore_error) = restored {
+                    log::error!("Failed to restore timeout after register load: {}", restore_error);
+                }
+                Err(error)
+            }
+        }
     }
 
     pub fn begin_store(&mut self) -> Result<bool, CpuClientError> {
@@ -1069,7 +1153,17 @@ impl CpuClient {
     }
 
     pub fn cycle(&mut self) -> Result<bool, CpuClientError> {
+        self.cycle_n(1)
+    }
+
+    pub fn reset_cpu(&mut self) -> Result<bool, CpuClientError> {
+        self.send_command_byte(ServerCommand::CmdReset)?;
+        self.read_result_code(ServerCommand::CmdReset)
+    }
+
+    pub fn cycle_n(&mut self, count: u8) -> Result<bool, CpuClientError> {
         self.send_command_byte(ServerCommand::CmdCycle)?;
+        self.send_buf(&[count])?;
         self.read_result_code(ServerCommand::CmdCycle)
     }
 
@@ -1182,12 +1276,8 @@ impl CpuClient {
     }
 
     pub fn get_last_error(&mut self) -> Result<String, CpuClientError> {
-        let mut errbuf: [u8; 50] = [0; 50];
         self.send_command_byte(ServerCommand::CmdGetLastError)?;
-        let bytes = self.recv_dyn_buf(&mut errbuf)?;
-        let err_string = str::from_utf8(&errbuf[..bytes - 1]).unwrap();
-
-        Ok(err_string.to_string())
+        read_error_reply(self.port.borrow_mut().as_mut())
     }
 
     pub fn read_pin(&mut self, pin_no: CpuPin) -> Result<bool, CpuClientError> {
@@ -1316,6 +1406,7 @@ impl CpuClient {
         let data_size = u32::from_le_bytes([param_buf[4], param_buf[5], param_buf[6], param_buf[7]]);
 
         if cycle_count == 0 {
+            self.read_result_code(ServerCommand::CmdGetCycleStates)?;
             return Ok(Vec::new());
         }
 
@@ -1485,5 +1576,48 @@ impl CpuClient {
         self.send_command_byte(ServerCommand::CmdSetJumpHint)?;
         self.send_buf(&buf)?;
         self.read_result_code(ServerCommand::CmdSetJumpHint)
+    }
+}
+
+// CmdGetLastError sends up to 255 UTF-8 bytes followed by its success byte,
+// with no NUL terminator or length prefix. Serial reads may split anywhere.
+fn read_error_reply<R: Read + ?Sized>(reader: &mut R) -> Result<String, CpuClientError> {
+    let mut message = Vec::new();
+    for _ in 0..256 {
+        let mut byte = [0];
+        reader.read_exact(&mut byte).map_err(|_| CpuClientError::ReadFailure)?;
+        match byte[0] {
+            0x01 => return String::from_utf8(message).map_err(|_| CpuClientError::TypeConversionError),
+            0x00 => return Err(CpuClientError::CommandFailed(ServerCommand::CmdGetLastError)),
+            value => message.push(value),
+        }
+    }
+    Err(CpuClientError::BadValue(ServerCommand::CmdGetLastError))
+}
+
+#[cfg(test)]
+mod error_reply_tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn reads_error_and_result_byte() {
+        let message = "Trap run requires a loaded trap fixture, 1..1000000 cycles, and an endpoint for continue";
+        let mut reply = Cursor::new([message.as_bytes(), &[0x01, 0xAA]].concat());
+        assert_eq!(read_error_reply(&mut reply).unwrap(), message);
+        assert_eq!(reply.position(), (message.len() + 1) as u64);
+        let mut next = [0];
+        reply.read_exact(&mut next).unwrap();
+        assert_eq!(next, [0xAA]);
+        assert_eq!(read_error_reply(&mut Cursor::new([0x01])).unwrap(), "");
+        assert_eq!(read_error_reply(&mut Cursor::new([vec![b'x'; 255], vec![0x01]].concat())).unwrap().len(), 255);
+    }
+
+    #[test]
+    fn rejects_malformed_error_replies() {
+        assert!(matches!(read_error_reply(&mut Cursor::new(b"partial")), Err(CpuClientError::ReadFailure)));
+        assert!(matches!(read_error_reply(&mut Cursor::new([0xFF, 0x01])), Err(CpuClientError::TypeConversionError)));
+        assert!(matches!(read_error_reply(&mut Cursor::new([b'x'; 256])), Err(CpuClientError::BadValue(_))));
+        assert!(matches!(read_error_reply(&mut Cursor::new([0x00])), Err(CpuClientError::CommandFailed(_))));
     }
 }

@@ -141,9 +141,11 @@ void setup() {
   // Open the USB CDC serial port for in-band communication.
   // We run the client-server protocol over this port.
   INBAND_SERIAL.begin(BAUD_RATE);
-  // Wait for the serial port to be ready.
-  while (!INBAND_SERIAL)
-    ;
+
+  // Temporarily disabled: 
+  //wait for a host to open the USB serial connection.
+  // while (!INBAND_SERIAL)
+  //   ;
 
   // Board initialization sets up the debug serial port.
   Board.init();
@@ -589,16 +591,17 @@ void print_cpu_state() {
   DEBUG_SERIAL.print(buf);
 #endif  
 
-#if defined(CPU_286) 
-  char ice0_chr = READ_ICE_PIN0 ? '1' : '0';
-  char ice1_chr = READ_ICE_PIN1 ? '1' : '0';
-  snprintf(
-    buf, 
-    buf_len,
-    "C:%c%c ",
-    ice0_chr, ice1_chr
-  );
-  DEBUG_SERIAL.print(buf);
+#if defined(CPU_286)
+  // Die photography confirms the ICE pins aren't bonded, so sampling them is meaningless.
+  // char ice0_chr = READ_ICE_PIN0 ? '1' : '0';
+  // char ice1_chr = READ_ICE_PIN1 ? '1' : '0';
+  // snprintf(
+  //   buf,
+  //   buf_len,
+  //   "C:%c%c ",
+  //   ice0_chr, ice1_chr
+  // );
+  // DEBUG_SERIAL.print(buf);
 #endif
 
   debugPrintColor(Controller.getBusStatusColor(CPU.bus_state), Controller.getBusStatusString(CPU.bus_state));
@@ -1936,8 +1939,8 @@ void handle_execute_state() {
     ArduinoX86::Bus->mem_write_bus(CPU.address_latch(), CPU.data_bus, !Controller.readBHEPin());
   }
 
-  if (cpu_mrdc && CPU.bus_cycle == T1) {
-    // CPU is reading from memory. Resolve from the bus emulator on T1 - the client can override this if desired.
+  if (CPU.bus_cycle == T1 && (CPU.bus_state == CODE || CPU.bus_state == MEMR)) {
+    // Resolve the latched read request on T1. MRDC is asserted later (T2 on the 286)
     if (ArduinoX86::Server.get_flags() & CommandServer<BoardType, ShieldType>::FLAG_RESOLVE_BUS_STEP) {
       CPU.data_bus = ArduinoX86::Bus->mem_read_bus(CPU.address_latch(), !Controller.readBHEPin(), false);
       Controller.getBoard().debugPrintf(
@@ -2094,6 +2097,7 @@ void handle_execute_automatic() {
     else if (CPU.bus_cycle == WRITE_CYCLE) {
       // The CPU is reading from the I/O bus. Read from the bus emulator.
       CPU.data_bus = ArduinoX86::Bus->io_read_bus(CPU.address_latch(), !Controller.readBHEPin());
+      Controller.writeDataBus(CPU.data_bus, CPU.data_width);
     }
   }
 

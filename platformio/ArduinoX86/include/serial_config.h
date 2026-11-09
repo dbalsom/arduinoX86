@@ -23,6 +23,8 @@
 
 #pragma once
 
+#include <Arduino.h>
+
 #define PACKET_SIZE 64 // Size of the packet buffer
 
 #if defined(__SAM3X8E__) // If Arduino DUE

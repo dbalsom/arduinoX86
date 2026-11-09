@@ -80,9 +80,12 @@ impl MemoryViewer {
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
                         if ui
-                            .button(
-                                egui::RichText::new(format!("{}", egui_phosphor::regular::DOWNLOAD_SIMPLE))
-                                    .size(self.icon_size),
+                            .add_enabled(
+                                !c_ctx.busy,
+                                egui::Button::new(
+                                    egui::RichText::new(format!("{}", egui_phosphor::regular::DOWNLOAD_SIMPLE))
+                                        .size(self.icon_size),
+                                ),
                             )
                             .on_hover_text("Download Memory")
                             .clicked()
@@ -93,6 +96,20 @@ impl MemoryViewer {
                             });
                         }
 
+                        if ui
+                            .add_enabled(
+                                !c_ctx.busy,
+                                egui::Button::new(
+                                    egui::RichText::new(egui_phosphor::fill::ERASER).size(self.icon_size),
+                                ),
+                            )
+                            .on_hover_text("Erase Memory")
+                            .clicked()
+                        {
+                            events.push(GuiEvent::EraseMemory);
+                        }
+
+                        ui.separator();
                         ui.label("Address:");
                         if ui.text_edit_singleline(&mut self.address_string).lost_focus() {
                             if let Ok(addr) = u32::from_str_radix(&self.address_string, 16) {

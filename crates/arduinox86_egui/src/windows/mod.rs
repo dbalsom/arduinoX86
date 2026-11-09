@@ -23,11 +23,13 @@
 pub mod binary_view;
 pub mod client_window;
 pub mod code_editor;
+pub mod disassembly_window;
 pub mod memory_viewer;
 pub mod register_window;
 
 pub use binary_view::BinaryView;
 pub use client_window::ClientWindow;
 pub use code_editor::CodeEditor;
+pub use disassembly_window::DisassemblyWindow;
 pub use memory_viewer::MemoryViewer;
 pub use register_window::RegisterWindow;

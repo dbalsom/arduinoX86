@@ -193,6 +193,7 @@ macro_rules! append_colored {
 impl Widget for CycleDisplay<'_> {
     fn ui(self, ui: &mut Ui) -> Response {
         let font = FontId::monospace(14.0);
+        let address_digits = self.arch.bus_chr_width();
         let mut inner_response = ui.interact(egui::Rect::NAN, ui.id().with("null"), egui::Sense::empty());
 
         // Draw ALE label (or blank space)
@@ -246,7 +247,7 @@ impl Widget for CycleDisplay<'_> {
 
                 // Draw address bus label
                 job.append(
-                    &format!("{:08X}", self.state.address_bus),
+                    &format!("{:0address_digits$X}", self.state.address_bus),
                     0.0,
                     TextFormat {
                         font_id: font.clone(),
@@ -272,8 +273,9 @@ impl Widget for CycleDisplay<'_> {
                     let text_color = if valid_dbus { TEXT_COLOR } else { Color32::RED };
 
                     inner_response = ui.add_sized(
-                        [40.0, ui.available_height()],
+                        [40.0, ui.spacing().interact_size.y],
                         egui::TextEdit::singleline(dbus_str)
+                            .id_salt("cycle_data_bus")
                             .font(TextStyle::Monospace)
                             .char_limit(4)
                             .text_color(text_color),

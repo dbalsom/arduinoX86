@@ -23,7 +23,7 @@
 
 #pragma once
 
-#include <Arduino.h>
+#include <cstdint>
 
 /// @brief Type of bus operation. This is used to for logging bus operations.
 enum class BusOperationType: uint8_t {

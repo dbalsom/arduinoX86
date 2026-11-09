@@ -20,7 +20,8 @@
     FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
     DEALINGS IN THE SOFTWARE.
 */
-use crate::enums::{FileOpenContext, FileSaveContext, MountAddress};
+use crate::enums::{ExecutionMode, FileOpenContext, FileSaveContext, MountAddress};
+use arduinox86_client::CpuPin;
 use std::path::PathBuf;
 
 #[derive(PartialEq, Eq)]
@@ -33,6 +34,22 @@ pub enum GuiEvent {
         size:    u32,
     },
     RunProgram,
+    Step,
+    StepInstruction,
+    ResetCpu,
+    ContinueTrap,
+    SetTrapEndpoint { cs: u16, ip: u16, enabled: bool },
+    SetExecutionMode(ExecutionMode),
+    Disconnect,
+    SetFlag {
+        flag:    u32,
+        enabled: bool,
+    },
+    WritePin {
+        pin:   CpuPin,
+        value: bool,
+    },
+    WriteDataBus(u16),
     AssembleProgram {
         program_name: String,
     },

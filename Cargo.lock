@@ -294,9 +294,11 @@ dependencies = [
  "env_logger",
  "image",
  "log",
+ "marty_dasm",
  "pollster 0.2.5",
  "rfd",
  "serde",
+ "serde_json",
  "serialport",
  "strum 0.26.3",
  "strum_macros 0.26.4",
@@ -2196,18 +2198,27 @@ dependencies = [
 
 [[package]]
 name = "marty_dasm"
-version = "0.1.0"
-source = "git+https://github.com/dbalsom/marty_dasm#1c2ac629c7b04ec862f83c001bd328aee5dcbda8"
+version = "0.4.0"
+source = "git+https://github.com/dbalsom/marty_dasm?rev=8f9178630254491ec0c8daf742b1910484876d22#8f9178630254491ec0c8daf742b1910484876d22"
 dependencies = [
+ "marty_dasm_common",
  "num-traits",
  "serde",
  "thiserror 2.0.16",
 ]
 
 [[package]]
+name = "marty_dasm_common"
+version = "0.1.0"
+source = "git+https://github.com/dbalsom/marty_dasm?rev=8f9178630254491ec0c8daf742b1910484876d22#8f9178630254491ec0c8daf742b1910484876d22"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "marty_isadb"
 version = "0.3.0"
-source = "git+https://github.com/dbalsom/marty_dasm#1c2ac629c7b04ec862f83c001bd328aee5dcbda8"
+source = "git+https://github.com/dbalsom/marty_dasm?rev=8f9178630254491ec0c8daf742b1910484876d22#8f9178630254491ec0c8daf742b1910484876d22"
 dependencies = [
  "csv",
  "marty_dasm",
@@ -3597,6 +3608,7 @@ dependencies = [
  "rand",
  "rand_distr",
  "serde",
+ "serde_json",
  "strum 0.27.2",
  "strum_macros 0.27.2",
  "tempfile",
