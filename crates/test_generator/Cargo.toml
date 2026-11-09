@@ -1,5 +1,6 @@
 [package]
 name = "test_generator"
+default-run = "test_generator"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -26,4 +27,5 @@ strum_macros.workspace = true
 time = { version = "0.3", features = ["macros", "formatting", "local-offset"] }
 
 [dev-dependencies]
+tempfile.workspace = true
 serde_json = "1.0"
