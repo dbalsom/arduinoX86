@@ -733,6 +733,21 @@ void set_data_bus_width() {
 }
 
 void cycle() {
+  if (CPU.trap.enabled) {
+    if (CPU.trap.state.status == TrapStatus::Paused || CPU.trap.state.status == TrapStatus::Captured
+        || CPU.trap.state.status == TrapStatus::Failed) {
+      return;
+    }
+    if (ArduinoX86::Server.state() == ServerState::StoreAll
+        || ArduinoX86::Server.state() == ServerState::IceRecovery286) {
+      if (!CPU.trap.remaining_cycles) {
+        CPU.trap.fail(TrapReason::Timeout);
+        ArduinoX86::Server.change_state(ServerState::Error);
+        return;
+      }
+      --CPU.trap.remaining_cycles;
+    }
+  }
 
   // Resolve data bus from last cycle.
   // if (!CPU.data_bus_resolved && (!Controller.readMRDCPin() || !Controller.readIORCPin())) {
@@ -948,7 +963,10 @@ void cycle() {
     //  - Executing a HALT
     //  - Asserting NMI before the end of the instruction
     case ServerState::Execute:
-      if (server_flags & CommandServer<BoardType, ShieldType>::FLAG_EXECUTE_AUTOMATIC) {
+      if (CPU.trap.enabled) {
+        handle_execute_trap();
+      }
+      else if (server_flags & CommandServer<BoardType, ShieldType>::FLAG_EXECUTE_AUTOMATIC) {
         handle_execute_automatic();
       }
       else {
@@ -1173,7 +1191,12 @@ void cycle() {
       }
       break;
 
+    case ServerState::IceRecovery286:
+      handle_ice_recovery_286();
+      break;
+
     case ServerState::StoreDoneSmm: // FALLTHROUGH
+    case ServerState::TrapStoreDone: // FALLTHROUGH
     case ServerState::StoreDone:
       // We are done with the Store program.
       break;
@@ -1249,7 +1272,8 @@ void cycle() {
       case ServerState::StoreDone:  // FALLTHROUGH
       case ServerState::StoreDoneSmm: // FALLTHROUGH
       case ServerState::Store: // FALLTHROUGH
-      case ServerState::StoreAll:
+      case ServerState::StoreAll: // FALLTHROUGH
+      case ServerState::IceRecovery286:
         #if TRACE_STORE
           print_cpu_state();
         #endif
@@ -1512,7 +1536,12 @@ void handle_loadall_286() {
     if (CPU.address_latch() == run_address) {
       Controller.getBoard().debugPrintln(DebugType::LOAD, "## LOADALL_286: Detected jump to new CS:IP to trigger transition into Execute.");
       ArduinoX86::Server.change_state(ServerState::Execute);
-      handle_execute_state(); // Handle the CODE fetch that triggered the transition
+      if (CPU.trap.enabled) {
+        handle_execute_trap();
+      }
+      else {
+        handle_execute_state(); // Handle the CODE fetch that triggered the transition
+      }
       
     }
     else {
@@ -1714,7 +1743,17 @@ void handle_storeall_286() {
       if (CPU.address_latch() == 0x000864) {
         // STOREALL terminating read.
         Controller.getBoard().debugPrintln(DebugType::STORE, "## STOREALL_286: Terminating read at 0x000864");
-        ArduinoX86::Server.change_state(ServerState::StoreDone);
+        if (CPU.trap.capturing) {
+          CPU.trap.complete_capture(ArduinoX86::Bus->loadall286_regs(), CPU.cycle_ct());
+          CPU.data_bus = CPU.trap.capture_image.tss_desc.limit;
+          Controller.writeDataBus(CPU.data_bus, CPU.data_width);
+          CPU.data_bus_resolved = true;
+          ArduinoX86::Server.change_state(CPU.trap.state.status == TrapStatus::Paused
+            ? ServerState::TrapStoreDone : ServerState::StoreDone);
+        }
+        else {
+          ArduinoX86::Server.change_state(ServerState::StoreDone);
+        }
       }
     }
   }
