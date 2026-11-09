@@ -140,6 +140,9 @@ execute the specified program binary.
 
 A program that generates CPU tests for emulator authors.
 
+The [segment limit capture suite](crates/test_generator/SEGMENT_LIMITS.md) adds deterministic
+286 and 386EX real and protected mode observations using the same CPU client and server.
+
 ### /shields
 
 Contains the KiCad project files and Gerber files for the various ArduinoX86 shields. See the README.md in each shield
