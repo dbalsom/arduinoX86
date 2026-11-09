@@ -8,8 +8,8 @@ repository.workspace = true
 
 [dependencies]
 arduinox86_client = { path = "../arduinox86_client", features = ["use_moo", "use_iced"] }
-marty_dasm = { git = "https://github.com/dbalsom/marty_dasm" }
-marty_isadb = { git = "https://github.com/dbalsom/marty_dasm" }
+marty_dasm.workspace = true
+marty_isadb.workspace = true
 log.workspace = true
 env_logger.workspace = true
 clap = { workspace = true, features = ["derive"] }
@@ -24,3 +24,6 @@ moo-rs.workspace = true
 strum.workspace = true
 strum_macros.workspace = true
 time = { version = "0.3", features = ["macros", "formatting", "local-offset"] }
+
+[dev-dependencies]
+serde_json = "1.0"

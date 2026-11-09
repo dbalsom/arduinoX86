@@ -273,8 +273,9 @@ impl Widget for CycleDisplay<'_> {
                     let text_color = if valid_dbus { TEXT_COLOR } else { Color32::RED };
 
                     inner_response = ui.add_sized(
-                        [40.0, ui.available_height()],
+                        [40.0, ui.spacing().interact_size.y],
                         egui::TextEdit::singleline(dbus_str)
+                            .id_salt("cycle_data_bus")
                             .font(TextStyle::Monospace)
                             .char_limit(4)
                             .text_color(text_color),

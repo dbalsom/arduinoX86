@@ -22,11 +22,13 @@
 */
 #pragma once
 
+#include <cstdint>
+
 #define OPCODE_HALT 0xF4
 #define OPCODE_DOUBLE_HALT 0xF4F4 // For 386, which only fetches at even addresses
 #define OPCODE_NOP 0x90
-#define OPCODE_80NOP 0x00
 #define OPCODE_DOUBLENOP 0x9090
+#define OPCODE_80NOP 0x00
 #define OPCODE_DOUBLE_80NOP 0x0000
 
 #define MODRM_OP(M) (((M & 0b00111000) >> 3) & 0x07)
@@ -49,3 +51,93 @@ extern const char * const OPCODE_STRS_GRP5[];
 extern const char * const OPCODE_8080_STRS[];
 extern const uint8_t OPCODE_REFS[];
 extern const uint8_t OPCODE_8080_REFS[];
+
+// Various opcode definitions for 286 and 386
+enum class Opcode : uint8_t {
+  Escape0F = 0x0F,
+  PopSs = 0x17,
+  PrefixEs = 0x26,
+  PrefixCs = 0x2E,
+  PrefixSs = 0x36,
+  PrefixDs = 0x3E,
+  IncAx = 0x40,
+  IncCx = 0x41,
+  IncDx = 0x42,
+  IncBx = 0x43,
+  IncSp = 0x44,
+  IncBp = 0x45,
+  IncSi = 0x46,
+  IncDi = 0x47,
+  DecAx = 0x48,
+  DecCx = 0x49,
+  DecDx = 0x4A,
+  DecBx = 0x4B,
+  DecSp = 0x4C,
+  DecBp = 0x4D,
+  DecSi = 0x4E,
+  DecDi = 0x4F,
+  // 386 prefixes; these encodings are undefined on the 286.
+  PrefixFs = 0x64,
+  PrefixGs = 0x65,
+  PrefixOperandSize = 0x66,
+  PrefixAddressSize = 0x67,
+  MovSegmentRm16 = 0x8E,
+  Nop = 0x90,
+  CallFarImmediate = 0x9A,
+  Popf = 0x9D,
+  MovAlImmediate = 0xB0,
+  MovClImmediate = 0xB1,
+  MovDlImmediate = 0xB2,
+  MovBlImmediate = 0xB3,
+  MovAhImmediate = 0xB4,
+  MovChImmediate = 0xB5,
+  MovDhImmediate = 0xB6,
+  MovBhImmediate = 0xB7,
+  MovAxImmediate = 0xB8,
+  MovCxImmediate = 0xB9,
+  MovDxImmediate = 0xBA,
+  MovBxImmediate = 0xBB,
+  MovSpImmediate = 0xBC,
+  MovBpImmediate = 0xBD,
+  MovSiImmediate = 0xBE,
+  MovDiImmediate = 0xBF,
+  RetFarImmediate = 0xCA,
+  RetFar = 0xCB,
+  Int3 = 0xCC,
+  IntImmediate = 0xCD,
+  Into = 0xCE,
+  Iret = 0xCF,
+  JmpFarImmediate = 0xEA,
+  PrefixLock = 0xF0,
+  StoreallPrefix286 = 0xF1,
+  PrefixRepne = 0xF2,
+  PrefixRep = 0xF3,
+  Halt = 0xF4,
+  Group5 = 0xFF,
+};
+
+// Secondary bytes after 0F have their own opcode map on the 286.
+enum class Opcode0F286 : uint8_t {
+  SystemGroup = 0x01,
+  Loadall = 0x05,
+};
+
+// ModR/M reg fields are opcode extensions (or segment indices), not primary
+// opcode bytes. Keep their names scoped to the instruction which uses them.
+enum class Group5Opcode : uint8_t {
+  CallFar = 0x03,
+  JmpFar = 0x05,
+};
+
+enum class SystemGroupOpcode286 : uint8_t {
+  Lgdt = 0x02,
+  Lidt = 0x03,
+  Lmsw = 0x06,
+};
+
+enum class SegmentRegisterEncoding : uint8_t {
+  Es = 0x00,
+  Cs = 0x01,
+  Ss = 0x02,
+  Ds = 0x03,
+};

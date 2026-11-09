@@ -27,6 +27,7 @@
 #include <InstructionQueue.h>
 #include <programs.h>
 #include <registers.h>
+#include <TrapExecution.h>
 
 // This class is slowly being converted from a C structure. Pardon the mess.
 
@@ -69,6 +70,7 @@ public:
   uint8_t emu_flags; // Flags pushed to stack by PUSH PSW during EmuExit program
   volatile registers1_t load_regs; // Register state set by Load command
   volatile Loadall286 loadall_regs_286; // Register state set by Loadall command on 286
+  TrapExecution trap;
   volatile Loadall386 loadall_regs_386; // Register state set by Loadall command on 386
   volatile registers1_t post_regs; // Register state retrieved from Store program
   uint8_t *readback_p;

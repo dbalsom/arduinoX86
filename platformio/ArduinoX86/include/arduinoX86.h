@@ -204,6 +204,13 @@ void clock_tick();
 void data_bus_write(uint16_t data, CpuBusWidth width);
 uint16_t data_bus_read();
 
+// TrapExecution.cpp
+// Null on success, otherwise a diagnostic for CmdLoad.
+const char* prepare_trap_execution();
+void handle_execute_trap();
+void resume_trap_handler();
+void handle_ice_recovery_286();
+
 // cpu.cpp
 void read_address(bool peek);
 void read_status0();

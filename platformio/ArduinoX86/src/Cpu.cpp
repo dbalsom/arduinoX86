@@ -24,6 +24,7 @@
 #include "Cpu.h"
 
 void Cpu::reset(CpuResetResult reset_result, bool preserve_bus_state, bool reset_registers) {
+  trap.reset();
 
   // Retain detected cpu & fpu type and emulation flags.
   //cpu_type = CpuType::Undetected;

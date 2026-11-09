@@ -1,3 +1,25 @@
+/*
+    ArduinoX86 Copyright 2022-2025 Daniel Balsom
+    https://github.com/dbalsom/arduinoX86
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the “Software”),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+*/
 use crate::{
     events::{GuiEvent, GuiEventQueue},
     serial_worker::PinReadout,
@@ -111,13 +133,12 @@ impl CpuInputControls {
                 .on_hover_text(pin.tooltip)
                 .on_disabled_hover_text(pin.unavailable.unwrap_or(if busy {
                     "Waiting for the current serial operation."
-                }
-                else {
+                } else {
                     "Waiting for a pin state read from the server."
                 }));
             if response.changed() {
                 events.push(GuiEvent::WritePin {
-                    pin:   pin.pin,
+                    pin: pin.pin,
                     value: checked ^ pin.inverted,
                 });
             }
@@ -131,7 +152,7 @@ mod tests {
     use arduinox86_client::ServerCommand;
 
     #[test]
-    fn ready_is_logical_while_busy_uses_the_legacy_raw_pin_level() {
+    fn ready_is_logical_busy_is_raw() {
         for cpu in [
             ServerCpuType::Intel8088,
             ServerCpuType::Intel80286,
@@ -158,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_hold_stays_disabled_until_reconnect() {
+    fn unsupported_hold_requires_reconnect() {
         let mut controls = CpuInputControls::new(ServerCpuType::Intel80386);
         let hold = &mut controls.pins[2];
         hold.read(Err(CpuClientError::CommandFailed(ServerCommand::CmdReadPin)));
@@ -169,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    fn transport_failure_invalidates_state_but_allows_a_later_refresh() {
+    fn refresh_recovers_transport_error() {
         let mut controls = CpuInputControls::new(ServerCpuType::Intel80286);
         let ready = &mut controls.pins[0];
         ready.read(Ok(true));

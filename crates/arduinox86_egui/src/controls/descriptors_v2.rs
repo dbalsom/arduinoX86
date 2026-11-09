@@ -21,7 +21,7 @@
     DEALINGS IN THE SOFTWARE.
 */
 use crate::register_state::RegisterString;
-use arduinox86_client::{RemoteCpuRegistersV2, SegmentDescriptorV1};
+use arduinox86_client::{trap::configure_managed_trap_registers, RemoteCpuRegistersV2, SegmentDescriptorV1};
 
 const DESCRIPTOR_LABELS: [&str; 8] = ["ES", "CS", "SS", "DS", "GDT", "LDT", "IDT", "TSS"];
 const FIELD_DIGITS: [usize; 3] = [6, 4, 2];
@@ -33,12 +33,22 @@ pub(super) struct DescriptorControlV2 {
     temporary_strings: [RegisterString; 10],
     link_segment_bases: bool,
     simulate_reset: bool,
+    managed_trap: bool,
     // Apply once per new result, so the user can subsequently collapse the section.
     pending_open: Option<bool>,
     pending_temporaries_open: Option<bool>,
 }
 
 impl DescriptorControlV2 {
+    pub(super) fn set_trap_enabled(&mut self, enabled: bool, regs: &mut RemoteCpuRegistersV2) {
+        self.managed_trap = enabled;
+        if enabled {
+            configure_managed_trap_registers(regs);
+            self.strings[6][0].text = format!("{:06X}", regs.idt_desc.base_address());
+            self.strings[6][1].text = format!("{:04X}", regs.idt_desc.limit());
+        }
+    }
+
     fn descriptors(regs: &RemoteCpuRegistersV2) -> [SegmentDescriptorV1; 8] {
         [
             regs.es_desc,
@@ -194,6 +204,7 @@ impl DescriptorControlV2 {
         let read_only = final_regs.is_some();
         // Sync even when collapsed, since selectors are edited above this section.
         if !read_only {
+            self.set_trap_enabled(self.managed_trap, regs);
             self.sync_segment_bases(regs);
         }
         egui::CollapsingHeader::new("Descriptors")
@@ -238,7 +249,8 @@ impl DescriptorControlV2 {
                             for col in 0..3 {
                                 let linked = !read_only && self.link_segment_bases && row < 4 && col == 0;
                                 let unused_access = !read_only && matches!(row, 4 | 6) && col == 2;
-                                let response = ui.add_enabled_ui(!linked && !unused_access, |ui| {
+                                let managed_idt = !read_only && self.managed_trap && row == 6 && col < 2;
+                                let response = ui.add_enabled_ui(!linked && !unused_access && !managed_idt, |ui| {
                                     Self::hex_field(
                                         ui,
                                         &mut self.strings[row][col],
@@ -251,6 +263,9 @@ impl DescriptorControlV2 {
                                     response
                                         .response
                                         .on_disabled_hover_text("Unused access-byte slot for GDTR/IDTR.");
+                                }
+                                else if managed_idt {
+                                    response.response.on_disabled_hover_text("IDTR is configured by trap execution mode.");
                                 }
                             }
                             if !read_only {
@@ -299,7 +314,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn field_edits_accept_full_width_and_reject_overflow() {
+    fn managed_idt_tracks_execution_mode() {
+        let mut regs = RemoteCpuRegistersV2::default();
+        regs.idt_desc.set_base_address(0x123456);
+        let initial = regs.clone();
+        let mut control = DescriptorControlV2::default();
+        control.set_regs(&regs, None);
+        control.set_trap_enabled(true, &mut regs);
+        assert_eq!(regs.idt_desc.base_address(), 0x003000);
+        assert_eq!(regs.idt_desc.limit(), 0x03FF);
+        assert_eq!(control.strings[6][0].text, "003000");
+        assert_eq!(control.strings[6][1].text, "03FF");
+        assert_eq!(regs.gdt_desc.into_bytes(), initial.gdt_desc.into_bytes());
+        regs.msw |= 1;
+        control.set_trap_enabled(true, &mut regs);
+        assert_eq!(regs.idt_desc.limit(), 0x07FF);
+        control.set_trap_enabled(false, &mut regs);
+        assert!(!control.managed_trap);
+        regs.idt_desc.set_base_address(0x654321);
+        control.set_regs(&initial, Some(&regs));
+        assert_eq!(control.strings[6][0].text, "654321");
+    }
+
+    #[test]
+    fn validates_descriptor_field_widths() {
         for (digits, maximum) in [(6, 0xFFFFFF), (4, 0xFFFF), (2, 0xFF)] {
             let mut value = 0;
             let mut text = format!("{maximum:X}");
@@ -323,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn linking_tracks_selectors_without_replacing_limits_or_access_bytes() {
+    fn selector_links_preserve_cache_fields() {
         let mut regs = RemoteCpuRegistersV2::default();
         regs.normalize_descriptors();
         regs.cs_desc = SegmentDescriptorV1::from_bytes([0, 0, 0x0F, 0x9B, 0x34, 0x12]);
@@ -344,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn simulated_reset_remaps_only_linked_cs_and_uses_the_high_reset_vector() {
+    fn reset_maps_linked_cs_to_reset_vector() {
         let mut regs = RemoteCpuRegistersV2 {
             es: 0xF000,
             ss: 0xF000,
@@ -387,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn final_changes_highlight_individual_fields_and_request_expansion() {
+    fn highlights_changed_descriptor_fields() {
         let initial = RemoteCpuRegistersV2::default();
         let mut control = DescriptorControlV2::default();
         control.set_regs(&initial, Some(&initial));
@@ -427,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn final_section_opens_on_changes_and_respects_subsequent_manual_collapse() {
+    fn final_section_allows_manual_collapse() {
         for temporaries in [false, true] {
             let context = egui::Context::default();
             context.style_mut(|style| style.animation_time = 0.0);

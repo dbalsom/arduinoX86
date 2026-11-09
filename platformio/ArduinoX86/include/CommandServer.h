@@ -50,7 +50,9 @@ enum class ServerState: uint8_t {
   Done            = 0x10,
   StoreAll        = 0x11, // STOREALL (or SMM on 386) is in progress.
   Shutdown        = 0x12, // The CPU has shutdown (286/386). The CPU will need to be reset to continue.
-  Error
+  Error           = 0x13,
+  TrapStoreDone   = 0x14,
+  IceRecovery286  = 0x15  // Restore a paused STOREALL image via the ICE restart vector.
 };
 
 template<typename BoardType, typename HatType> class BoardController;
@@ -60,6 +62,11 @@ class CommandServer {
 public:
 
   using CmdFn = bool (CommandServer::*)();
+
+  // Supported features returned by CmdCapabilities, independent of enabled flags.
+  // Trap execution includes resumable STOREALL captures between steps.
+  static constexpr uint32_t CAP_TRAP_EXECUTION_286 = 0x00000001;
+  static constexpr uint32_t CAP_SERVER_TRAP_HANDLER_286 = 0x00000002;
 
   static constexpr uint32_t FLAG_EMU_8080           = 0x00000001;
   static constexpr uint32_t FLAG_EXECUTE_AUTOMATIC  = 0x00000002;
@@ -71,6 +78,7 @@ public:
   static constexpr uint32_t FLAG_LOG_CYCLES         = 0x00000080; // Enable cycle logging
   static constexpr uint32_t FLAG_ALE_INTERRUPT      = 0x00000100; // Enable ALE interrupt to deassert READY at T1
   static constexpr uint32_t FLAG_RESOLVE_BUS_STEP   = 0x00000200; // Resolve the data bus when single-stepping (Execute state)
+  static constexpr uint32_t FLAG_ENABLE_TRAP_EXECUTION = 0x00000400; // 286 TF execution, independent of automatic/cycle stepping
 
   enum class ServerCommand {
     CmdNone            = 0x00,
@@ -115,6 +123,13 @@ public:
     CmdClearCycleLog   = 0x27,
     CmdSetProgramBounds = 0x28,
     CmdSetJumpHint     = 0x29,
+    CmdStepInstruction = 0x2A,
+    CmdGetInstructionState = 0x2B,
+    CmdSetTrapEndpoint = 0x2C,
+    CmdContinueTrap = 0x2D,
+    CmdGetTrapCapture = 0x2E,
+    CmdCapabilities = 0x2F,
+    CmdSetRealModeTrapHandler = 0x30,
     CmdInvalid
   };
 
@@ -129,6 +144,8 @@ public:
   void change_state(ServerState new_state);
   ServerState state() const { return state_; }
   const char* get_last_error() const;
+  // Execution-state handlers report diagnostics through the same query channel.
+  void set_error(const char* format, ...);
 
   const char* get_command_name(ServerCommand cmd);
   const char* get_state_string(ServerState state);
@@ -190,7 +207,6 @@ private:
   uint8_t get_command_input_bytes(ServerCommand cmd);
 
   // Error handling methods
-  void set_error(const char* format, ...);
   void clear_error() {
     set_error("NO ERROR");
   }
@@ -282,6 +298,14 @@ private:
   bool cmd_clear_cycle_log(void);
   bool cmd_set_program_bounds(void);
   bool cmd_set_jump_hint(void);
+  bool cmd_step_instruction(void);
+  bool cmd_get_instruction_state(void);
+  bool cmd_set_trap_endpoint(void);
+  bool cmd_continue_trap(void);
+  bool cmd_get_trap_capture(void);
+  bool cmd_capabilities(void);
+  bool cmd_set_real_mode_trap_handler(void);
+  bool cmd_run_trap(bool single_step);
   bool cmd_null(void);
 };
 

@@ -23,6 +23,7 @@
 
 #pragma once
 
+#include <cstdio>
 #include <limits>
 
 #include <bus_emulator/IBusBackend.h>

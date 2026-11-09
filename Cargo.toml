@@ -38,6 +38,8 @@ pollster = "0.2"
 tempfile = "3.20"
 uuid = "1.18.0"
 egui-phosphor = { version = "0.10", features = ["fill"] }
+marty_dasm = { git = "https://github.com/dbalsom/marty_dasm", rev = "8f9178630254491ec0c8daf742b1910484876d22" }
+marty_isadb = { git = "https://github.com/dbalsom/marty_dasm", rev = "8f9178630254491ec0c8daf742b1910484876d22" }
 
 [workspace.dependencies.iced-x86]
 version = "1.21"

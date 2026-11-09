@@ -21,9 +21,70 @@
     DEALINGS IN THE SOFTWARE.
 */
 
-#[derive(strum_macros::Display, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ExecutionMode {
+    QueueTracked,
+    Trap,
+    Halt,
+}
+
+impl ExecutionMode {
+    /// Apply this mode's initial TF and managed IDTR settings, including to imported registers.
+    pub(crate) fn apply_to_registers(self, regs: &mut arduinox86_client::RemoteCpuRegisters) {
+        use arduinox86_client::{
+            trap::{configure_managed_trap_registers, TRAP_FLAG},
+            Registers32,
+            RemoteCpuRegisters,
+        };
+
+        let tf = if self == Self::Trap { TRAP_FLAG } else { 0 };
+        match regs {
+            RemoteCpuRegisters::V1(regs) => regs.flags = (regs.flags & !TRAP_FLAG) | tf,
+            RemoteCpuRegisters::V2(regs) => {
+                regs.flags = (regs.flags & !TRAP_FLAG) | tf;
+                if tf != 0 {
+                    configure_managed_trap_registers(regs);
+                }
+            }
+            RemoteCpuRegisters::V3(regs) => regs.set_eflags((regs.eflags() & !u32::from(TRAP_FLAG)) | u32::from(tf)),
+        }
+    }
+
+    pub fn from_flags(flags: u32) -> Self {
+        if flags & arduinox86_client::ServerFlags::ENABLE_TRAP_EXECUTION != 0 {
+            Self::Trap
+        }
+        else {
+            Self::Halt
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::QueueTracked => "Queue Tracked IP Termination (8088/8086 default)",
+            Self::Trap => "Trap execution",
+            Self::Halt => "Halt-based termination",
+        }
+    }
+
+    pub fn unavailable_reason(self, cpu: arduinox86_client::ServerCpuType, flags: u32) -> Option<&'static str> {
+        use arduinox86_client::{ServerCpuType, ServerFlags};
+
+        match self {
+            Self::QueueTracked => Some("Queue-tracked termination is not yet available in the GUI runner."),
+            Self::Trap if !matches!(cpu, ServerCpuType::Intel80286) => Some("Trap execution requires an 80286."),
+            Self::Trap if flags & (ServerFlags::USE_SMM | ServerFlags::EMU_8080) != 0 => {
+                Some("Disable SMM and 8080 emulation before selecting trap execution.")
+            }
+            _ => None,
+        }
+    }
+}
+
+#[derive(strum_macros::Display, Copy, Clone, Debug, PartialEq, Eq)]
 pub enum CpuStateType {
     Initial,
+    Current,
     Final,
 }
 

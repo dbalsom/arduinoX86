@@ -21,11 +21,11 @@
     DEALINGS IN THE SOFTWARE.
 */
 use crate::{controls::descriptors_v2::DescriptorControlV2, events::GuiEventQueue, register_state::RegisterString};
-use arduinox86_client::RemoteCpuRegistersV2;
+use arduinox86_client::{trap::TRAP_FLAG, RemoteCpuRegistersV2};
 use egui::Color32;
 
-const REGISTER_LABELS: [&str; 17] = [
-    "AX", "SP", "BX", "BP", "CX", "SI", "DX", "DI", "DS", "ES", "SS", "CS", "IP", "FLAGS", "MSW", "TR", "LDTR",
+const REGISTER_LABELS: [&str; 16] = [
+    "AX", "SP", "BX", "BP", "CX", "SI", "DX", "DI", "DS", "ES", "SS", "CS", "IP", "FLAGS", "TR", "LDTR",
 ];
 const FLAGS_INDEX: usize = 13;
 const LABEL_WIDTH: f32 = 48.0;
@@ -34,7 +34,7 @@ const FLAG_BITS: [(&str, &str, u16); 10] = [
     ("O", "Overflow", 0x0800),
     ("D", "Direction", 0x0400),
     ("I", "Interrupt enable", 0x0200),
-    ("T", "Trap", 0x0100),
+    ("T", "Trap", TRAP_FLAG),
     ("S", "Sign", 0x0080),
     ("Z", "Zero", 0x0040),
     ("A", "Auxiliary carry", 0x0010),
@@ -42,11 +42,17 @@ const FLAG_BITS: [(&str, &str, u16); 10] = [
     ("C", "Carry", 0x0001),
     ("NT", "Nested task", 0x4000),
 ];
+const MSW_BITS: [(&str, &str, u16); 4] = [
+    ("PE", "Protection enable", 0x0001),
+    ("MP", "Monitor coprocessor", 0x0002),
+    ("EM", "Emulate coprocessor", 0x0004),
+    ("TS", "Task switched", 0x0008),
+];
 
 pub struct RegisterControlV2 {
     regs: RemoteCpuRegistersV2,
     final_regs: Option<RemoteCpuRegistersV2>,
-    reg_strings: [RegisterString; 17],
+    reg_strings: [RegisterString; 16],
     descriptors: DescriptorControlV2,
 }
 
@@ -68,14 +74,14 @@ impl Default for RegisterControlV2 {
 }
 
 impl RegisterControlV2 {
-    fn values(regs: &RemoteCpuRegistersV2) -> [u16; 17] {
+    fn values(regs: &RemoteCpuRegistersV2) -> [u16; 16] {
         [
             regs.ax, regs.sp, regs.bx, regs.bp, regs.cx, regs.si, regs.dx, regs.di, regs.ds, regs.es, regs.ss, regs.cs,
-            regs.ip, regs.flags, regs.msw, regs.tr, regs.ldt,
+            regs.ip, regs.flags, regs.tr, regs.ldt,
         ]
     }
 
-    fn values_mut(regs: &mut RemoteCpuRegistersV2) -> [&mut u16; 17] {
+    fn values_mut(regs: &mut RemoteCpuRegistersV2) -> [&mut u16; 16] {
         [
             &mut regs.ax,
             &mut regs.sp,
@@ -91,13 +97,12 @@ impl RegisterControlV2 {
             &mut regs.cs,
             &mut regs.ip,
             &mut regs.flags,
-            &mut regs.msw,
             &mut regs.tr,
             &mut regs.ldt,
         ]
     }
 
-    fn strings(initial: &RemoteCpuRegistersV2, final_regs: Option<&RemoteCpuRegistersV2>) -> [RegisterString; 17] {
+    fn strings(initial: &RemoteCpuRegistersV2, final_regs: Option<&RemoteCpuRegistersV2>) -> [RegisterString; 16] {
         let initial_values = Self::values(initial);
         let values = Self::values(final_regs.unwrap_or(initial));
         std::array::from_fn(|i| RegisterString::from_diff(format!("{:04X}", values[i]), values[i] != initial_values[i]))
@@ -117,18 +122,27 @@ impl RegisterControlV2 {
         &self.regs
     }
 
+    pub fn set_trap_enabled(&mut self, enabled: bool) {
+        if self.final_regs.is_none() {
+            if (self.regs.flags & TRAP_FLAG != 0) != enabled {
+                self.set_flag(TRAP_FLAG, enabled);
+            }
+            self.descriptors.set_trap_enabled(enabled, &mut self.regs);
+        }
+    }
+
     // Commit valid edits immediately so clicking Load/Run uses the visible value.
     // On leaving an invalid field, restore its previous value.
     fn apply_edit(text: &mut String, value: &mut u16, lost_focus: bool, is_flags: bool) {
         if let Ok(parsed) = u16::from_str_radix(text, 16) {
             *value = if is_flags {
-                Self::normalize_flags(parsed)
+                (Self::normalize_flags(parsed) & !TRAP_FLAG) | (*value & TRAP_FLAG)
             }
             else {
                 parsed
             };
         }
-        if lost_focus {
+        if lost_focus || (is_flags && u16::from_str_radix(text, 16).is_ok_and(|parsed| (parsed ^ *value) & TRAP_FLAG != 0)) {
             *text = format!("{:04X}", *value);
         }
     }
@@ -195,7 +209,7 @@ impl RegisterControlV2 {
             &[(8, None), (9, None), (10, None), (11, Some(12))],
         );
         ui.separator();
-        self.show_register_grid(ui, "registers_286_control", &[(13, Some(14)), (15, Some(16))]);
+        self.show_register_grid(ui, "registers_286_control", &[(13, None), (14, Some(15))]);
         ui.separator();
         ui.horizontal_wrapped(|ui| {
             for (label, tooltip, mask) in FLAG_BITS {
@@ -210,7 +224,10 @@ impl RegisterControlV2 {
                 }
                 else {
                     let mut set = self.regs.flags & mask != 0;
-                    if ui.checkbox(&mut set, label).on_hover_text(tooltip).changed() {
+                    if ui.add_enabled(mask != TRAP_FLAG, egui::Checkbox::new(&mut set, label))
+                        .on_hover_text(tooltip)
+                        .on_disabled_hover_text("TF is controlled by Execution mode.")
+                        .changed() {
                         self.set_flag(mask, set);
                     }
                 }
@@ -228,6 +245,31 @@ impl RegisterControlV2 {
                 if ui.add(egui::DragValue::new(&mut iopl).range(0..=3)).changed() {
                     self.regs.flags = Self::normalize_flags((self.regs.flags & !0x3000) | (iopl << 12));
                     self.reg_strings[FLAGS_INDEX].text = format!("{:04X}", self.regs.flags);
+                }
+            }
+        });
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.monospace("MSW");
+            for (label, tooltip, mask) in MSW_BITS {
+                let read_only = self.final_regs.is_some();
+                let msw = self.final_regs.as_ref().unwrap_or(&self.regs).msw;
+                let mut set = msw & mask != 0;
+                let changed = read_only && (self.regs.msw ^ msw) & mask != 0;
+                let label = egui::RichText::new(label)
+                    .color(if changed { Color32::CYAN } else { crate::TEXT_COLOR });
+                if ui
+                    .add_enabled(!read_only, egui::Checkbox::new(&mut set, label))
+                    .on_hover_text(tooltip)
+                    .on_disabled_hover_text(tooltip)
+                    .changed()
+                {
+                    if set {
+                        self.regs.msw |= mask;
+                    }
+                    else {
+                        self.regs.msw &= !mask;
+                    }
                 }
             }
         });
@@ -254,7 +296,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn edits_preserve_sixteen_bit_values_and_reject_invalid_input() {
+    fn execution_mode_owns_trap_flag() {
+        let mut control = RegisterControlV2::default();
+        control.set_regs(&RemoteCpuRegistersV2 { flags: 0x0103, ..Default::default() }, None);
+        control.set_trap_enabled(false);
+        assert_eq!(control.regs().flags, 0x0003);
+        let mut text = "FFFF".to_string();
+        RegisterControlV2::apply_edit(&mut text, &mut control.regs.flags, false, true);
+        assert_eq!(control.regs.flags & TRAP_FLAG, 0);
+        assert_eq!(text, "7ED7");
+        control.set_trap_enabled(true);
+        text = "0000".into();
+        RegisterControlV2::apply_edit(&mut text, &mut control.regs.flags, false, true);
+        assert_eq!(control.regs.flags, 0x0102);
+        assert_eq!(text, "0102");
+        let final_regs = RemoteCpuRegistersV2 { flags: 0x0002, ..Default::default() };
+        control.set_regs(&control.regs.clone(), Some(&final_regs));
+        control.set_trap_enabled(true);
+        assert_eq!(control.reg_strings[FLAGS_INDEX].text, "0002");
+    }
+
+    #[test]
+    fn validates_register_edits() {
         let mut value = 0x1234;
         let mut text = "ABCD".to_string();
         RegisterControlV2::apply_edit(&mut text, &mut value, false, false);
@@ -268,8 +331,8 @@ mod tests {
     }
 
     #[test]
-    fn flags_text_edits_enforce_reserved_bits_and_preserve_parity() {
-        for (input, expected) in [("0000", 0x0002), ("FFFF", 0x7FD7), ("8028", 0x0002), ("0004", 0x0006)] {
+    fn flag_edits_preserve_reserved_bits() {
+        for (input, expected) in [("0000", 0x0002), ("FFFF", 0x7ED7), ("8028", 0x0002), ("0004", 0x0006)] {
             let mut text = input.to_string();
             let mut flags = 0x0002;
             RegisterControlV2::apply_edit(&mut text, &mut flags, false, true);
@@ -280,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_initial_flags_without_altering_the_final_readout() {
+    fn normalizes_only_initial_flags() {
         let initial = RemoteCpuRegistersV2 {
             flags: 0xFFFF,
             ..Default::default()
@@ -298,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn flag_edits_update_the_register_sent_to_the_cpu() {
+    fn flag_edits_update_cpu_register() {
         let mut control = RegisterControlV2::default();
         control.set_flag(0x0001, true);
         control.set_flag(0x0400, true);
@@ -309,7 +372,7 @@ mod tests {
     }
 
     #[test]
-    fn final_values_are_highlighted_and_cleared_for_a_new_initial_state() {
+    fn highlights_and_clears_final_changes() {
         let initial = RemoteCpuRegistersV2::default();
         let mut final_regs = initial.clone();
         final_regs.ax = 0xBEEF;
@@ -327,5 +390,53 @@ mod tests {
         assert!(control.final_regs.is_none());
         assert_eq!(control.reg_strings[0].text, "0000");
         assert_eq!(control.reg_strings[0].color32, crate::TEXT_COLOR);
+    }
+
+    #[test]
+    fn compares_step_and_final_snapshots() {
+        use crate::{enums::CpuStateType, windows::RegisterWindow};
+        use arduinox86_client::{trap::{InstructionState, TrapStatus}, RemoteCpuRegisters};
+        let initial = RemoteCpuRegistersV2 { flags: 0x0002, ..Default::default() };
+        let initial_regs = RemoteCpuRegisters::V2(initial.clone());
+        let mut first = initial.clone();
+        first.ax = 1;
+        first.flags |= 0x0001;
+        first.ds_desc.set_base_address(0x12345);
+        let mut wire = [0; InstructionState::WIRE_SIZE];
+        wire[0] = 1;
+        let mut state = InstructionState::from_bytes(&wire).unwrap();
+        state.status = TrapStatus::Paused;
+        state.run_id = 1;
+        state.sequence = 1;
+        state.capture_cycle = 10;
+        let mut window = RegisterWindow::default();
+        window.loaded(&initial_regs, true);
+        assert_eq!(window.readout_state_type(), CpuStateType::Current);
+        assert!(window.control_v2.final_regs.is_some(), "current registers must be read-only");
+        window.set_readout(&initial_regs, &RemoteCpuRegisters::V2(first.clone()), Some(&state));
+        assert_eq!(window.control_v2.reg_strings[0].color32, Color32::CYAN);
+        assert_eq!(window.control_v2.reg_strings[FLAGS_INDEX].color32, Color32::CYAN);
+
+        let mut second = first.clone();
+        second.bx = 2;
+        state.sequence += 1;
+        state.capture_cycle += 10;
+        let second_regs = RemoteCpuRegisters::V2(second);
+        // Repeated delivery of the same snapshot must not erase its highlights.
+        for _ in 0..2 {
+            window.set_readout(&initial_regs, &second_regs, Some(&state));
+            assert_eq!(window.control_v2.reg_strings[0].color32, crate::TEXT_COLOR);
+            assert_eq!(window.control_v2.reg_strings[2].color32, Color32::CYAN);
+            assert_eq!(window.control_v2.reg_strings[FLAGS_INDEX].color32, crate::TEXT_COLOR);
+            assert_eq!(window.control_v2.regs().ds_desc.base_address(), first.ds_desc.base_address());
+        }
+        // The endpoint can finalize the very same paused image without a clock.
+        state.status = TrapStatus::Captured;
+        window.set_readout(&initial_regs, &second_regs, Some(&state));
+        assert_eq!(window.readout_state_type(), CpuStateType::Final);
+        assert_eq!(window.control_v2.reg_strings[0].color32, Color32::CYAN);
+        assert_eq!(window.control_v2.reg_strings[2].color32, Color32::CYAN);
+        assert_eq!(window.control_v2.reg_strings[FLAGS_INDEX].color32, Color32::CYAN);
+        assert_eq!(window.control_v2.regs().ds_desc.base_address(), initial.ds_desc.base_address());
     }
 }

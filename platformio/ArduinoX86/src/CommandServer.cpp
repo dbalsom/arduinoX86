@@ -24,6 +24,7 @@
 #include <cstdarg>
 
 #include <Arduino.h>
+#include <arduinoX86.h>
 #include <config.h>
 
 #include <Shield.h>
@@ -120,6 +121,13 @@ const char* CommandServer<BoardType, ShieldType>::get_command_name(ServerCommand
       case ServerCommand::CmdClearCycleLog: return "CmdClearCycleLog";
       case ServerCommand::CmdSetProgramBounds: return "CmdSetProgramBounds";
       case ServerCommand::CmdSetJumpHint: return "CmdSetJumpHint";
+      case ServerCommand::CmdStepInstruction: return "CmdStepInstruction";
+      case ServerCommand::CmdGetInstructionState: return "CmdGetInstructionState";
+      case ServerCommand::CmdSetTrapEndpoint: return "CmdSetTrapEndpoint";
+      case ServerCommand::CmdContinueTrap: return "CmdContinueTrap";
+      case ServerCommand::CmdGetTrapCapture: return "CmdGetTrapCapture";
+      case ServerCommand::CmdCapabilities: return "CmdCapabilities";
+      case ServerCommand::CmdSetRealModeTrapHandler: return "CmdSetRealModeTrapHandler";
       case ServerCommand::CmdInvalid: return "CmdInvalid";
       default: return "Unknown";
   }
@@ -146,6 +154,8 @@ const char* CommandServer<BoardType, ShieldType>::get_state_string(ServerState s
       case ServerState::StoreDoneSmm: return "StoreDoneSmm";
       case ServerState::Done: return "Done";
       case ServerState::StoreAll: return "StoreAll";
+      case ServerState::TrapStoreDone: return "TrapStoreDone";
+      case ServerState::IceRecovery286: return "IceRecovery286";
       case ServerState::Shutdown: return "Shutdown";
       case ServerState::Error: return "Error";
       default: return "Invalid";
@@ -174,6 +184,8 @@ char CommandServer<BoardType, ShieldType>::get_state_char(ServerState state) {
       case ServerState::StoreAll: return 'A';
       case ServerState::Done: return 'D';
       case ServerState::Error: return '!';
+      case ServerState::TrapStoreDone: return 'T';
+      case ServerState::IceRecovery286: return 'I';
       case ServerState::Shutdown: return 'H';
       default: return '?';
   }
@@ -271,6 +283,13 @@ bool CommandServer<BoardType, ShieldType>::dispatch_command(ServerCommand cmd) {
         return cmd_set_program_bounds();      
     case ServerCommand::CmdSetJumpHint:
         return cmd_set_jump_hint();  
+    case ServerCommand::CmdStepInstruction: return cmd_step_instruction();
+    case ServerCommand::CmdGetInstructionState: return cmd_get_instruction_state();
+    case ServerCommand::CmdSetTrapEndpoint: return cmd_set_trap_endpoint();
+    case ServerCommand::CmdContinueTrap: return cmd_continue_trap();
+    case ServerCommand::CmdGetTrapCapture: return cmd_get_trap_capture();
+    case ServerCommand::CmdCapabilities: return cmd_capabilities();
+    case ServerCommand::CmdSetRealModeTrapHandler: return cmd_set_real_mode_trap_handler();
     case ServerCommand::CmdInvalid:
     default:
         return cmd_invalid();
@@ -347,6 +366,13 @@ uint8_t CommandServer<BoardType, ShieldType>::get_command_input_bytes(ServerComm
         case ServerCommand::CmdClearCycleLog: return 0; // No parameters needed to clear cycle log
         case ServerCommand::CmdSetProgramBounds: return 8; // Parameters: start_addr (4 bytes), end_addr (4 bytes).
         case ServerCommand::CmdSetJumpHint: return 2; // Parameter. First byte: 0 (clear hint) (1) set hint. 2nd byte: 0 (even address), 1 (odd address)
+        case ServerCommand::CmdStepInstruction: return 4;
+        case ServerCommand::CmdGetInstructionState: return 0;
+        case ServerCommand::CmdSetTrapEndpoint: return 5;
+        case ServerCommand::CmdContinueTrap: return 4;
+        case ServerCommand::CmdGetTrapCapture: return 0;
+        case ServerCommand::CmdCapabilities: return 0;
+        case ServerCommand::CmdSetRealModeTrapHandler: return 4;
         case ServerCommand::CmdInvalid: return 0;
         default: return 0;
     }
@@ -440,6 +466,10 @@ void CommandServer<BoardType, ShieldType>::change_state(ServerState new_state) {
       CPU.program->set_pc(4); // Set v_pc to 4 to skip IVT segment:offset
       break;
     case ServerState::Execute:
+      if (state_ == ServerState::TrapStoreDone || state_ == ServerState::IceRecovery286) {
+        executing_ = true;
+        break;
+      }
       // Reset cycle logger.
       ArduinoX86::Bus->reset_logging();
       ArduinoX86::CycleLogger->reset();
@@ -511,6 +541,11 @@ void CommandServer<BoardType, ShieldType>::change_state(ServerState new_state) {
       CPU.program->reset();
       executing_ = true;
       break;
+    case ServerState::IceRecovery286:
+      CPU.trap.restore_phase = TrapRestorePhase::Restart;
+      executing_ = true;
+      break;
+    case ServerState::TrapStoreDone:
     case ServerState::StoreDone:
       executing_ = false;
       break;  
@@ -521,11 +556,17 @@ void CommandServer<BoardType, ShieldType>::change_state(ServerState new_state) {
       executing_ = false;
       break;
     case ServerState::Shutdown:
+      if (CPU.trap.enabled) {
+        CPU.trap.fail(TrapReason::Shutdown);
+      }
       CPU.error_cycle_ct = 0;
       controller_.getBoard().debugPrintln(DebugType::ERROR, "Entering shutdown state. Please reset the CPU.");
       executing_ = false;
       break;
     case ServerState::Error:
+      if (CPU.trap.enabled && CPU.trap.state.status != TrapStatus::Failed) {
+        CPU.trap.fail(TrapReason::InvalidFrame);
+      }
       CPU.error_cycle_ct = 0;
       controller_.getBoard().debugPrintln(DebugType::ERROR, "Entering error state. Please reset the CPU.");
       executing_ = false;
@@ -564,6 +605,8 @@ void CommandServer<BoardType, ShieldType>::change_state(ServerState new_state) {
 // command will reset the CPU and set register state.
 template<typename BoardType, typename ShieldType>
 bool CommandServer<BoardType, ShieldType>::cmd_reset_cpu() {
+  CPU.trap.reset(); // Release the paused/failed clock guard before physical reset.
+  CPU.trap.endpoint_enabled = false;
   debug_cmd("In cmd_reset()");
   CpuResetResult result;
   clear_error();
@@ -604,9 +647,16 @@ bool CommandServer<BoardType, ShieldType>::cmd_cpu_type() {
 // Execute the specified number of CPU cycles.
 template<typename BoardType, typename ShieldType>
 bool CommandServer<BoardType, ShieldType>::cmd_cycle() {
+  if (state_ == ServerState::TrapStoreDone) {
+    set_error("Use instruction step or continue to resume a trap");
+    return false;
+  }
   uint8_t cycle_ct = commandBuffer_[0];
   for (uint8_t i = 0; i < cycle_ct; i++) {
     cycle();
+    if (CPU.trap.enabled && !executing_) {
+      break;
+    }
   }
   return true;
 }
@@ -620,6 +670,7 @@ bool CommandServer<BoardType, ShieldType>::cmd_cycle() {
 // On 80286, this command takes 102 bytes, which correspond to the LOADALL structure.
 template<typename BoardType, typename ShieldType>
 bool CommandServer<BoardType, ShieldType>::cmd_load() {
+  CPU.trap.reset(); // A new load invalidates previous boundary/capture metadata.
 
   clear_error();
   volatile uint8_t *read_p = nullptr;
@@ -730,6 +781,10 @@ bool CommandServer<BoardType, ShieldType>::cmd_load() {
       break;
   }
 
+  if ((flags_ & FLAG_ENABLE_TRAP_EXECUTION) && reg_type != 1) {
+    set_error("Trap execution requires 286 LOADALL registers");
+    return false;
+  }
   if (reset_cpu) {
     ArduinoX86::Server.change_state(ServerState::Reset);
     CpuResetResult result = Controller.resetCpu();
@@ -741,6 +796,13 @@ bool CommandServer<BoardType, ShieldType>::cmd_load() {
     }
     Controller.getBoard().debugPrintln(DebugType::LOAD, "## cmd_load(): Successfully reset CPU...");
     CPU.have_queue_status = result.queueStatus;
+    if (flags_ & FLAG_ENABLE_TRAP_EXECUTION) {
+      if (const char* error = prepare_trap_execution()) {
+        set_error("%s", error);
+        change_state(ServerState::Error);
+        return false;
+      }
+    }
 
 #if USE_SETUP_PROGRAM
     change_state(ServerState::CpuSetup);
@@ -751,7 +813,7 @@ bool CommandServer<BoardType, ShieldType>::cmd_load() {
 
   // Run CPU and wait for load to finish
   int load_timeout = 0;
-  while ((state_ != ServerState::Execute) && (state_ != ServerState::Error)) {
+  while ((state_ != ServerState::Execute) && (state_ != ServerState::Error) && (state_ != ServerState::StoreDone)) {
     cycle();
     load_timeout++;
 
@@ -978,6 +1040,10 @@ bool CommandServer<BoardType, ShieldType>::cmd_begin_store(void) {
 // Execute state must be in ExecuteDone before executing Store command
 template<typename BoardType, typename ShieldType>
 bool CommandServer<BoardType, ShieldType>::cmd_store(void) {
+  if (CPU.trap.enabled) {
+    set_error("Use GetTrapCapture for trap execution");
+    return false;
+  }
 
   size_t write_len = 0;
 
@@ -1310,6 +1376,20 @@ bool CommandServer<BoardType, ShieldType>::cmd_set_flags(void) {
             (static_cast<uint32_t>(commandBuffer_[2]) << 16) |
             (static_cast<uint32_t>(commandBuffer_[3]) << 24);
 
+  if ((new_flags & FLAG_ENABLE_TRAP_EXECUTION) && CPU.cpu_type != CpuType::i80286) {
+    set_error("Trap execution requires an 80286");
+    return false;
+  }
+  if ((new_flags & FLAG_ENABLE_TRAP_EXECUTION) && (new_flags & (FLAG_USE_SMM | FLAG_EMU_8080))) {
+    set_error("Trap execution is incompatible with SMM/emulation mode");
+    return false;
+  }
+  if (CPU.trap.enabled && (state_ == ServerState::Execute || state_ == ServerState::TrapStoreDone
+      || state_ == ServerState::StoreAll || state_ == ServerState::IceRecovery286)
+      && ((new_flags ^ flags_) & ~(FLAG_EXECUTE_AUTOMATIC | FLAG_DEBUG_ENABLED))) {
+    set_error("Reset before changing flags during trap execution");
+    return false;
+  }
   if (new_flags & CommandServer::FLAG_EMU_8080) {
       // Enable 8080 emulation mode
     if ((CPU.cpu_type == CpuType::necV20) || (CPU.cpu_type == CpuType::necV30)) {
@@ -1586,8 +1666,14 @@ bool CommandServer<BoardType, ShieldType>::cmd_read_memory() {
                   (static_cast<uint32_t>(commandBuffer_[6]) << 16) |
                   (static_cast<uint32_t>(commandBuffer_[7]) << 24);
 
-  size_t mem_size = ArduinoX86::Bus->mem_size();
-  if (address >= mem_size || (address + size) > mem_size) {
+  const size_t mem_size = ArduinoX86::Bus->mem_size();
+  const auto backend = ArduinoX86::Bus->backend_type();
+  // Sparse memory has no contiguous allocation size. SDRAM must stay within
+  // its actual allocation; check the entire range before accepting the read.
+  if (uint64_t(address) + size > (uint64_t(1) << 32)
+      || backend == IBusBackendType::Null || backend == IBusBackendType::Invalid
+      || (backend == IBusBackendType::Sdram
+        && (!mem_size || address > mem_size || size > mem_size - address))) {
     controller_.getBoard().debugPrintf(
       DebugType::ERROR, 
       false, 
@@ -1596,7 +1682,7 @@ bool CommandServer<BoardType, ShieldType>::cmd_read_memory() {
       mem_size
     );
     set_error("Invalid address range: %08lX - %08lX", address, address + size);
-    //return false;
+    return false;
   }
 
   // Special-case 1, 2, and 4 bytes.
@@ -1632,21 +1718,28 @@ bool CommandServer<BoardType, ShieldType>::cmd_read_memory() {
     }
     default:
     {
-      uint8_t *ptr = ArduinoX86::Bus->get_ptr(address);
-
-      if (ptr == nullptr) {
-        controller_.getBoard().debugPrintf(DebugType::ERROR, false, "## cmd_read_memory(): Invalid address: %08lX\n\r", address);
-        set_error("Invalid address: %08lX", address);
-        return false;
-      }
-
       controller_.getBoard().debugPrintf(DebugType::CMD, false, "## cmd_read_memory(): Sending %lu bytes from address: %08lX to client...\n\r", size, address);
       set_error("No error");
 
       // Send an initial success byte, so that the client knows we are sending data.
       // Otherwise it doesn't know if the command failed and will have to time out.
       proto_write((uint8_t *)"\x01", 1);
-      proto_write(ptr, size);
+      if (size) {
+        uint8_t *ptr = ArduinoX86::Bus->get_ptr(address);
+        if (ptr != nullptr) {
+          // SDRAM retains the direct-buffer transfer path.
+          proto_write(ptr, size);
+        } else {
+          uint8_t buffer[256];
+          uint32_t offset = 0;
+          while (offset < size) {
+            const size_t count = (size - offset < sizeof(buffer)) ? size - offset : sizeof(buffer);
+            ArduinoX86::Bus->mem_read_bytes(address + offset, buffer, count);
+            proto_write(buffer, count);
+            offset += count;
+          }
+        }
+      }
       break;
     }
   }
@@ -1735,6 +1828,115 @@ void CommandServer<BoardType, ShieldType>::set_error(const char* format, ...) {
 template<typename BoardType, typename ShieldType>
 const char* CommandServer<BoardType, ShieldType>::get_last_error() const {
   return errorBuffer_;
+}
+
+// Replies with acceptance, a 32-bit server capability mask, and the final result.
+template<typename BoardType, typename ShieldType>
+bool CommandServer<BoardType, ShieldType>::cmd_capabilities() {
+  const uint32_t capabilities = CPU.cpu_type == CpuType::i80286
+    ? CAP_TRAP_EXECUTION_286 | CAP_SERVER_TRAP_HANDLER_286 : 0u;
+  proto_write(uint8_t(1));
+  INBAND_SERIAL.write(reinterpret_cast<const uint8_t*>(&capabilities), 4);
+  return true;
+}
+
+template<typename BoardType, typename ShieldType>
+bool CommandServer<BoardType, ShieldType>::cmd_get_instruction_state() {
+  proto_write(uint8_t(1));
+  INBAND_SERIAL.write(reinterpret_cast<const uint8_t*>(&CPU.trap.state), sizeof(InstructionState));
+  return true;
+}
+
+template<typename BoardType, typename ShieldType>
+bool CommandServer<BoardType, ShieldType>::cmd_set_real_mode_trap_handler() {
+  uint32_t address;
+  memcpy(&address, commandBuffer_, sizeof(address));
+  if (CPU.cpu_type != CpuType::i80286 || !TrapExecution::valid_real_mode_handler(address)) {
+    set_error("286 real-mode handler must fit below 1 MiB and not overlap STOREALL at 800h-865h");
+    return false;
+  }
+  // Reset leaves the server in Execute even before a trap fixture is loaded.
+  // Allow configuration there, but do not relocate a live trap run's handler.
+  if ((executing_ && (CPU.trap.enabled || is_execute_automatic()))
+      || (CPU.trap.enabled && state_ == ServerState::TrapStoreDone)) {
+    set_error("Reset or finish execution before relocating the trap handler");
+    return false;
+  }
+  CPU.trap.real_mode_handler = address;
+  return true;
+}
+
+template<typename BoardType, typename ShieldType>
+bool CommandServer<BoardType, ShieldType>::cmd_set_trap_endpoint() {
+  if (commandBuffer_[0] > 1 || (executing_ && is_execute_automatic())) {
+    set_error("Set the endpoint before loading or while paused");
+    return false;
+  }
+  CPU.trap.endpoint_enabled = commandBuffer_[0] != 0;
+  memcpy(&CPU.trap.endpoint_cs, commandBuffer_ + 1, 2);
+  memcpy(&CPU.trap.endpoint_ip, commandBuffer_ + 3, 2);
+  return true;
+}
+
+template<typename BoardType, typename ShieldType>
+bool CommandServer<BoardType, ShieldType>::cmd_run_trap(bool single_step) {
+  uint32_t budget;
+  memcpy(&budget, commandBuffer_, 4);
+  if (!CPU.trap.enabled || (state_ != ServerState::Execute && state_ != ServerState::TrapStoreDone)
+      || !budget || budget > 1000000 || (!single_step && !CPU.trap.endpoint_enabled)) {
+    set_error("Trap run requires a loaded trap fixture, 1..1000000 cycles, and an endpoint for continue");
+    return false;
+  }
+  const bool initial_endpoint = CPU.trap.state.status == TrapStatus::Ready && CPU.trap.at_endpoint();
+  CPU.trap.start(single_step, budget, CPU.cycle_ct());
+  if (initial_endpoint) {
+    CPU.trap.state.status = TrapStatus::Captured;
+    CPU.trap.state.reason = TrapReason::Endpoint;
+    CPU.trap.state.capture_cycle = CPU.cycle_ct();
+    change_state(ServerState::StoreDone);
+    return true;
+  }
+  if (state_ == ServerState::TrapStoreDone) {
+    if (CPU.trap.at_endpoint()) {
+      // This boundary already has a complete STOREALL image. Retargeting a
+      // paused step to its saved return address must not clock or capture again.
+      CPU.trap.state.status = TrapStatus::Captured;
+      CPU.trap.state.reason = TrapReason::Endpoint;
+      change_state(ServerState::StoreDone);
+    }
+    else {
+      change_state(ServerState::IceRecovery286);
+    }
+  }
+  while (executing_) {
+    cycle();
+  }
+  // The command succeeded even if the CPU run failed; query its typed reason.
+  return true;
+}
+
+template<typename BoardType, typename ShieldType>
+bool CommandServer<BoardType, ShieldType>::cmd_step_instruction() { return cmd_run_trap(true); }
+
+template<typename BoardType, typename ShieldType>
+bool CommandServer<BoardType, ShieldType>::cmd_continue_trap() { return cmd_run_trap(false); }
+
+template<typename BoardType, typename ShieldType>
+bool CommandServer<BoardType, ShieldType>::cmd_get_trap_capture() {
+  const bool paused_capture = state_ == ServerState::TrapStoreDone
+      && CPU.trap.state.status == TrapStatus::Paused && CPU.trap.capture_ready;
+  const bool endpoint_capture = state_ == ServerState::StoreDone
+      && CPU.trap.state.status == TrapStatus::Captured;
+  if (!CPU.trap.enabled || (!paused_capture && !endpoint_capture)) {
+    set_error("No completed trap capture");
+    return false;
+  }
+  proto_write(uint8_t(1));
+  INBAND_SERIAL.write(reinterpret_cast<const uint8_t*>(&CPU.trap.state), sizeof(InstructionState));
+  const auto& regs = CPU.trap.capture_ready ? CPU.trap.capture_image
+      : *const_cast<const Loadall286*>(&CPU.loadall_regs_286);
+  INBAND_SERIAL.write(reinterpret_cast<const uint8_t*>(&regs), sizeof(regs));
+  return true;
 }
 
 template class CommandServer<BoardType, ShieldType>;

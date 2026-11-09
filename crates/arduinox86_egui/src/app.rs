@@ -34,17 +34,18 @@ use crate::{
     config::ConfigFile,
     enums::{BinaryBlobType, ClientControlState, CpuStateType, MountAddress, ScheduleType},
     events::{FrontendThreadEvent, GuiEvent, GuiEventQueue},
+    memory_upload::MemoryUpload,
     resource_manager::ResourceManager,
     scheduler::Scheduler,
     serial_manager::SerialManager,
-    serial_worker::{MemoryUpload, SerialCommand, SerialOutcome, SerialUpdate, SerialWorker},
+    serial_worker::{SerialCommand, SerialOutcome, SerialUpdate, SerialWorker},
     structs::{BinaryBlob, ScheduledEvent},
     style::custom_style,
     window_manager::WindowManager,
-    windows::{ClientWindow, MemoryViewer, RegisterWindow},
+    windows::{ClientWindow, DisassemblyWindow, MemoryViewer, RegisterWindow},
 };
 use anyhow::{bail, Result};
-use arduinox86_client::{RegisterSetType, RemoteCpuRegisters};
+use arduinox86_client::{RegisterSetType, RemoteCpuRegisters, ServerFlags};
 use clap::Parser;
 use egui::{
     containers::menu::{MenuButton, MenuConfig},
@@ -70,78 +71,6 @@ struct Cli {
     config_file: PathBuf,
 }
 
-#[cfg(test)]
-mod serial_scheduling_tests {
-    use super::*;
-    use crate::serial_worker::SerialReply;
-    use arduinox86_client::{ProgramState, ServerCpuType};
-    use std::{thread, time::Instant};
-
-    #[test]
-    fn repeated_background_requests_coalesce_and_take_turns() {
-        let ctx = egui::Context::default();
-        let (observed_tx, observed_rx) = crossbeam_channel::unbounded();
-        let worker = SerialWorker::spawn(ctx.clone(), move |requests, replies, _, _| {
-            while let Ok(command) = requests.recv() {
-                observed_tx.send(command.label()).unwrap();
-                if replies
-                    .send(SerialReply {
-                        operation: command.label(),
-                        result:    Ok(SerialOutcome::Update(Default::default())),
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
-        let mut app = App::default();
-        app.ts.serial_worker = Some(worker);
-        app.ts.client_ctx = Some(ClientContext::new(
-            "test".into(),
-            ServerCpuType::Intel80286,
-            false,
-            ProgramState::Execute,
-            0,
-        ));
-        app.ts.auto_refresh = true;
-        for _ in 0..100 {
-            app.ts.event_queue.push(GuiEvent::PollStatus);
-            app.ts.event_queue.push(GuiEvent::RefreshMemory);
-        }
-        app.handle_events(&ctx);
-        app.submit_background();
-        assert_eq!(
-            observed_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-            "Reading CPU status"
-        );
-
-        // More timer ticks while the response is pending create no queued I/O.
-        for _ in 0..100 {
-            app.ts.event_queue.push(GuiEvent::PollStatus);
-            app.ts.event_queue.push(GuiEvent::RefreshMemory);
-        }
-        app.handle_events(&ctx);
-        app.submit_background();
-        assert!(observed_rx.try_recv().is_err());
-        assert!(app.ts.poll_requested && app.ts.memory_refresh_requested);
-
-        let deadline = Instant::now() + Duration::from_secs(1);
-        while app.serial_busy() {
-            app.handle_serial_replies();
-            assert!(Instant::now() < deadline);
-            thread::yield_now();
-        }
-        app.submit_background();
-        assert_eq!(
-            observed_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-            "Reading memory"
-        );
-        assert!(app.ts.poll_requested);
-        assert!(!app.ts.memory_refresh_requested);
-    }
-}
-
 #[derive(Default)]
 pub struct TransientAppState {
     ctx_init: bool,
@@ -158,6 +87,7 @@ pub struct TransientAppState {
     initial_register_window: RegisterWindow,
     final_register_window: RegisterWindow,
     memory_viewer_window: MemoryViewer,
+    disassembly_window: DisassemblyWindow,
     scheduler: Scheduler,
     event_queue: GuiEventQueue,
     error_msg: Option<String>,
@@ -546,6 +476,7 @@ impl eframe::App for App {
                 .client_window
                 .show(ctx, client_ctx, &mut self.ts.event_queue, serial_busy);
             let mut update_state = false;
+            let trap_enabled = client_ctx.cached_flags() & ServerFlags::ENABLE_TRAP_EXECUTION != 0;
             // Get the initial state from the client.
             let mut initial_state = client_ctx.initial_state_mut();
             let mut new_state = initial_state.clone();
@@ -555,11 +486,12 @@ impl eframe::App for App {
                 *self.ts.initial_register_window.open_mut() = true;
             }
 
+            self.ts.initial_register_window.set_trap_enabled(trap_enabled);
             match &initial_state.regs {
                 RemoteCpuRegisters::V2(_) | RemoteCpuRegisters::V3(_) => {
                     self.ts
                         .initial_register_window
-                        .show(ctx, CpuStateType::Initial, &mut self.ts.event_queue);
+                        .show(ctx, CpuStateType::Initial, &mut self.ts.event_queue, serial_busy);
 
                     let new_regs = self.ts.initial_register_window.regs();
 
@@ -575,9 +507,10 @@ impl eframe::App for App {
                 }
             }
 
+            let readout_state_type = self.ts.final_register_window.readout_state_type();
             self.ts
                 .final_register_window
-                .show(ctx, CpuStateType::Final, &mut self.ts.event_queue);
+                .show(ctx, readout_state_type, &mut self.ts.event_queue, serial_busy);
 
             //self.ts.code_editor_window.show(ctx, &mut self.ts.event_queue);
             self.ts.window_manager.show(
@@ -590,6 +523,7 @@ impl eframe::App for App {
             self.ts
                 .memory_viewer_window
                 .show(ctx, client_ctx, &mut self.ts.event_queue);
+            self.ts.disassembly_window.show(ctx);
 
             self.ts.scheduler.run(&mut self.ts.event_queue);
 
@@ -656,19 +590,21 @@ impl App {
                 Ok(SerialOutcome::Connected(context, update)) => {
                     self.ts.error_msg = None;
                     self.ts.client_window.init(&context);
+                    self.ts.disassembly_window.connect(context.cpu_type);
                     self.ts
                         .initial_register_window
                         .set_regs(&context.initial_state().regs, None);
                     *self.ts.initial_register_window.open_mut() = true;
-                    *self.ts.final_register_window.open_mut() = false;
+                    self.ts.final_register_window.clear_readout();
                     self.ts.client_ctx = Some(context);
                     self.apply_serial_update(update);
                 }
                 Ok(SerialOutcome::Disconnected) => {
                     self.ts.client_ctx = None;
                     self.ts.client_window.reset_state();
+                    self.ts.disassembly_window.clear();
                     *self.ts.initial_register_window.open_mut() = false;
-                    *self.ts.final_register_window.open_mut() = false;
+                    self.ts.final_register_window.clear_readout();
                     self.ts.error_msg = None;
                     self.ts.event_queue.events.clear();
                     self.ts.poll_requested = false;
@@ -676,6 +612,9 @@ impl App {
                 }
                 Ok(SerialOutcome::Update(update)) => self.apply_serial_update(update),
                 Err(error) => {
+                    if reply.operation == "Reading disassembly" {
+                        self.ts.disassembly_window.read_failed(error.clone());
+                    }
                     let message = format!("{} failed: {}", reply.operation, error);
                     log::error!("{}", message);
                     if self.ts.error_msg.as_ref() != Some(&message) {
@@ -690,16 +629,33 @@ impl App {
     fn apply_serial_update(&mut self, mut update: SerialUpdate) {
         if let Some(context) = &mut self.ts.client_ctx {
             if let Some(flags) = update.flags {
+                if context.server_flags & ServerFlags::ENABLE_TRAP_EXECUTION != 0
+                    && flags & ServerFlags::ENABLE_TRAP_EXECUTION == 0 {
+                    self.ts.disassembly_window.clear();
+                }
                 context.server_flags = flags;
             }
             if let Some(status) = update.status {
                 context.program_state = status.state;
             }
-            self.ts.client_window.apply(&mut update);
-            if let Some((initial, final_regs)) = update.registers {
-                self.ts.final_register_window.set_regs(&initial, Some(&final_regs));
-                *self.ts.final_register_window.open_mut() = true;
+            if let Some(regs) = &update.loaded_regs {
+                self.ts.disassembly_window.loaded(regs);
+                self.ts.final_register_window.loaded(regs, context.server_flags & ServerFlags::ENABLE_TRAP_EXECUTION != 0);
             }
+            if let Some(instruction) = &update.instruction {
+                self.ts.disassembly_window.observe(instruction);
+                self.ts.final_register_window.observe_instruction(instruction);
+            }
+            if update.memory_changed {
+                self.ts.disassembly_window.refresh();
+            }
+            if let Some(readout) = update.disassembly.take() {
+                self.ts.disassembly_window.apply(readout);
+            }
+            if let Some((initial, regs)) = &update.registers {
+                self.ts.final_register_window.set_readout(initial, regs, update.instruction.as_ref());
+            }
+            self.ts.client_window.apply(&mut update);
             if let Some((address, data)) = update.memory {
                 let viewer = &mut self.ts.memory_viewer_window;
                 if viewer.address == address && viewer.size as usize == data.len() {
@@ -722,7 +678,8 @@ impl App {
             match event {
                 GuiEvent::ResetState => {
                     self.ts.client_window.reset_state();
-                    *self.ts.final_register_window.open_mut() = false;
+                    self.ts.disassembly_window.clear();
+                    self.ts.final_register_window.clear_readout();
                 }
                 GuiEvent::Disconnect => {
                     if let Some(worker) = &mut self.ts.serial_worker {
@@ -745,19 +702,47 @@ impl App {
                                 name: blob.name.clone(),
                                 address,
                                 data: blob.data.clone(),
+                                is_program: matches!(blob.blob_type, BinaryBlobType::Program),
                             });
                         }
                     }
                     if self.submit_serial(SerialCommand::Load { regs, run, uploads }) {
                         self.ts.client_window.reset_state();
-                        *self.ts.final_register_window.open_mut() = false;
+                        self.ts.disassembly_window.clear();
+                        self.ts.final_register_window.clear_readout();
                     }
                 }
                 GuiEvent::Step => {
-                    self.submit_serial(SerialCommand::Step);
+                    if self.submit_serial(SerialCommand::Step) {
+                        self.ts.disassembly_window.execution_started();
+                    }
+                }
+                GuiEvent::StepInstruction => {
+                    if self.submit_serial(SerialCommand::StepInstruction) {
+                        self.ts.disassembly_window.execution_started();
+                    }
+                }
+                GuiEvent::ResetCpu => {
+                    if self.submit_serial(SerialCommand::ResetCpu) {
+                        self.ts.disassembly_window.clear();
+                    }
+                }
+                GuiEvent::ContinueTrap => {
+                    if self.submit_serial(SerialCommand::ContinueTrap) {
+                        self.ts.disassembly_window.execution_started();
+                    }
+                }
+                GuiEvent::SetTrapEndpoint { cs, ip, enabled } => {
+                    self.submit_serial(SerialCommand::SetTrapEndpoint { cs, ip, enabled });
                 }
                 GuiEvent::SetFlag { flag, enabled } => {
-                    self.submit_serial(SerialCommand::SetFlag { flag, enabled });
+                    if self.submit_serial(SerialCommand::SetFlag { flag, enabled })
+                        && flag == ServerFlags::EXECUTE_AUTOMATIC && enabled {
+                        self.ts.disassembly_window.execution_started();
+                    }
+                }
+                GuiEvent::SetExecutionMode(mode) => {
+                    self.submit_serial(SerialCommand::SetExecutionMode(mode));
                 }
                 GuiEvent::WritePin { pin, value } => {
                     self.submit_serial(SerialCommand::WritePin { pin, value });
@@ -791,11 +776,15 @@ impl App {
                             MountAddress::CsIp => self.ts.initial_register_window.code_address(),
                         };
                         let size = size.unwrap_or(blob.data.len()).min(blob.data.len());
-                        self.submit_serial(SerialCommand::Upload(MemoryUpload {
-                            name: blob.name.clone(),
-                            address,
-                            data: blob.data[..size].to_vec(),
-                        }));
+                        self.submit_serial(SerialCommand::Upload {
+                            upload: MemoryUpload {
+                                name: blob.name.clone(),
+                                address,
+                                data: blob.data[..size].to_vec(),
+                                is_program: matches!(blob.blob_type, BinaryBlobType::Program),
+                            },
+                            regs: self.ts.initial_register_window.load_regs(),
+                        });
                     }
                     else {
                         self.gs.toasts.error(format!("Blob {blob_name} not found."));
@@ -916,6 +905,13 @@ impl App {
         if self.ts.client_ctx.is_none() || self.serial_busy() {
             return;
         }
+        if let Some(request) = self.ts.disassembly_window.pending_request() {
+            if self.ts.serial_worker.as_mut().unwrap()
+                .submit_background(SerialCommand::ReadDisassembly(request)).is_ok() {
+                self.ts.disassembly_window.submitted(request);
+            }
+            return;
+        }
         if self.ts.memory_refresh_requested && (!self.ts.poll_requested || self.ts.next_background_memory) {
             let viewer = &self.ts.memory_viewer_window;
             if self
@@ -953,5 +949,139 @@ impl App {
             }
             Err(e) => bail!("Failed to read assembly file {}: {}", path.as_ref().display(), e),
         }
+    }
+}
+
+#[cfg(test)]
+mod serial_scheduling_tests {
+    use super::*;
+    use crate::serial_worker::SerialReply;
+    use arduinox86_client::{ProgramState, ServerCpuType};
+    use std::{thread, time::Instant};
+
+    #[test]
+    fn tracks_and_resets_register_history() {
+        use arduinox86_client::{trap::{InstructionState, TrapStatus}, RemoteCpuRegistersV2};
+        let mut app = App::default();
+        app.ts.client_ctx = Some(ClientContext::new(
+            "test".into(), ServerCpuType::Intel80286, false,
+            ProgramState::Execute, ServerFlags::ENABLE_TRAP_EXECUTION,
+        ));
+        let initial = RemoteCpuRegisters::V2(RemoteCpuRegistersV2::default());
+        app.apply_serial_update(SerialUpdate { loaded_regs: Some(initial.clone()), ..Default::default() });
+        assert_eq!(app.ts.final_register_window.readout_state_type(), CpuStateType::Current);
+        let mut wire = [0; InstructionState::WIRE_SIZE];
+        wire[0] = 1;
+        let mut state = InstructionState::from_bytes(&wire).unwrap();
+        state.status = TrapStatus::Paused;
+        state.run_id = 1;
+        for sequence in 1..=2 {
+            state.sequence = sequence;
+            state.capture_cycle = sequence * 10;
+            let regs = RemoteCpuRegisters::V2(RemoteCpuRegistersV2 { ax: sequence as u16, ..Default::default() });
+            app.apply_serial_update(SerialUpdate {
+                instruction: Some(state.clone()), registers: Some((initial.clone(), regs)), ..Default::default()
+            });
+            let RemoteCpuRegisters::V2(baseline) = app.ts.final_register_window.regs() else { panic!("286 expected"); };
+            assert_eq!(baseline.ax, (sequence - 1) as u16);
+            assert_eq!(app.ts.final_register_window.readout_state_type(), CpuStateType::Current);
+        }
+        // An ordinary status poll must neither advance nor erase the baseline.
+        app.apply_serial_update(SerialUpdate { instruction: Some(state.clone()), ..Default::default() });
+        let RemoteCpuRegisters::V2(baseline) = app.ts.final_register_window.regs() else { panic!("286 expected"); };
+        assert_eq!(baseline.ax, 1);
+        state.status = TrapStatus::Captured;
+        app.apply_serial_update(SerialUpdate {
+            instruction: Some(state.clone()),
+            registers: Some((initial.clone(), RemoteCpuRegisters::V2(RemoteCpuRegistersV2 { ax: 2, ..Default::default() }))),
+            ..Default::default()
+        });
+        assert_eq!(app.ts.final_register_window.readout_state_type(), CpuStateType::Final);
+        let RemoteCpuRegisters::V2(baseline) = app.ts.final_register_window.regs() else { panic!("286 expected"); };
+        assert_eq!(baseline.ax, 0);
+
+        // Even a repeated run/sequence identity cannot carry history across Load.
+        let loaded = RemoteCpuRegisters::V2(RemoteCpuRegistersV2 { ax: 9, ..Default::default() });
+        app.apply_serial_update(SerialUpdate { loaded_regs: Some(loaded.clone()), ..Default::default() });
+        state.status = TrapStatus::Paused;
+        app.apply_serial_update(SerialUpdate {
+            instruction: Some(state.clone()), registers: Some((loaded.clone(), loaded.clone())), ..Default::default()
+        });
+        let RemoteCpuRegisters::V2(baseline) = app.ts.final_register_window.regs() else { panic!("286 expected"); };
+        assert_eq!(baseline.ax, 9);
+        state.status = TrapStatus::Idle;
+        app.apply_serial_update(SerialUpdate { instruction: Some(state.clone()), ..Default::default() });
+        assert!(!app.ts.final_register_window.open());
+        state.status = TrapStatus::Paused;
+        state.run_id += 1;
+        app.apply_serial_update(SerialUpdate {
+            instruction: Some(state), registers: Some((initial.clone(), loaded)), ..Default::default()
+        });
+        let RemoteCpuRegisters::V2(baseline) = app.ts.final_register_window.regs() else { panic!("286 expected"); };
+        assert_eq!(baseline.ax, 0);
+    }
+
+    #[test]
+    fn coalesces_and_schedules_requests() {
+        let ctx = egui::Context::default();
+        let (observed_tx, observed_rx) = crossbeam_channel::unbounded();
+        let worker = SerialWorker::spawn(ctx.clone(), move |requests, replies, _, _| {
+            while let Ok(command) = requests.recv() {
+                observed_tx.send(command.label()).unwrap();
+                if replies
+                    .send(SerialReply {
+                        operation: command.label(),
+                        result:    Ok(SerialOutcome::Update(Default::default())),
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        let mut app = App::default();
+        app.ts.serial_worker = Some(worker);
+        app.ts.client_ctx = Some(ClientContext::new(
+            "test".into(),
+            ServerCpuType::Intel80286,
+            false,
+            ProgramState::Execute,
+            0,
+        ));
+        app.ts.auto_refresh = true;
+        for _ in 0..100 {
+            app.ts.event_queue.push(GuiEvent::PollStatus);
+            app.ts.event_queue.push(GuiEvent::RefreshMemory);
+        }
+        app.handle_events(&ctx);
+        app.submit_background();
+        assert_eq!(
+            observed_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            "Reading CPU status"
+        );
+
+        // More timer ticks while the response is pending create no queued I/O.
+        for _ in 0..100 {
+            app.ts.event_queue.push(GuiEvent::PollStatus);
+            app.ts.event_queue.push(GuiEvent::RefreshMemory);
+        }
+        app.handle_events(&ctx);
+        app.submit_background();
+        assert!(observed_rx.try_recv().is_err());
+        assert!(app.ts.poll_requested && app.ts.memory_refresh_requested);
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while app.serial_busy() {
+            app.handle_serial_replies();
+            assert!(Instant::now() < deadline);
+            thread::yield_now();
+        }
+        app.submit_background();
+        assert_eq!(
+            observed_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            "Reading memory"
+        );
+        assert!(app.ts.poll_requested);
+        assert!(!app.ts.memory_refresh_requested);
     }
 }

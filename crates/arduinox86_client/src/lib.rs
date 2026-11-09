@@ -25,6 +25,7 @@
 mod commands;
 mod cycle_state;
 mod registers;
+pub mod trap;
 
 use binrw::BinReaderExt;
 use log;
@@ -52,6 +53,16 @@ pub use registers::*;
 
 pub struct ServerFlags;
 
+/// Supported server features, queried once when a client connects.
+/// These describe available functionality; ServerFlags select runtime options.
+pub struct ServerCapabilities;
+
+impl ServerCapabilities {
+    /// 286 trap execution, including resumable STOREALL captures between steps.
+    pub const TRAP_EXECUTION_286: u32 = 0x0000_0001;
+    pub const SERVER_TRAP_HANDLER_286: u32 = 0x0000_0002;
+}
+
 #[derive(Copy, Clone, Debug)]
 pub enum MemoryStrategy {
     Random,
@@ -71,6 +82,7 @@ impl ServerFlags {
     pub const ENABLE_CYCLE_LOGGING: u32 = 0x0000_0080; // Enable cycle logging
     pub const ENABLE_ALE_INTERRUPT: u32 = 0x0000_0100; // Enable ALE interrupt to arbitrate READY line
     pub const RESOLVE_BUS_STEP: u32     = 0x0000_0200; // Resolve bus step on each cycle
+    pub const ENABLE_TRAP_EXECUTION: u32 = 0x0000_0400; // 286 TF execution (requires TRAP_EXECUTION_286 capability)
 }
 
 /// [ServerCommand] represents the commands that can be sent to the Arduino808X server.
@@ -118,6 +130,13 @@ pub enum ServerCommand {
     CmdClearCycleLog = 0x27,
     CmdSetProgramBounds = 0x28,
     CmdSetJumpHint = 0x29,
+    CmdStepInstruction = 0x2A,
+    CmdGetInstructionState = 0x2B,
+    CmdSetTrapEndpoint = 0x2C,
+    CmdContinueTrap = 0x2D,
+    CmdGetTrapCapture = 0x2E,
+    CmdCapabilities = 0x2F,
+    CmdSetRealModeTrapHandler = 0x30,
     CmdInvalid,
 }
 
@@ -579,6 +598,8 @@ pub enum ProgramState {
     StoreAll,
     Shutdown,
     Error,
+    TrapStoreDone,
+    IceRecovery286,
 }
 
 /// Convert a raw u8 value received from the Arduino808X server to a [ProgramState].
@@ -606,6 +627,8 @@ impl TryFrom<u8> for ProgramState {
             0x11 => Ok(ProgramState::StoreAll),
             0x12 => Ok(ProgramState::Shutdown),
             0x13 => Ok(ProgramState::Error),
+            0x14 => Ok(ProgramState::TrapStoreDone),
+            0x15 => Ok(ProgramState::IceRecovery286),
             _ => Err(CpuClientError::TypeConversionError),
         }
     }
@@ -756,6 +779,7 @@ pub enum CpuClientError {
 /// A [CpuClient] represents a connection to an `ArduinoX86` server over a serial port.
 pub struct CpuClient {
     port: Rc<RefCell<Box<dyn serialport::SerialPort>>>,
+    capabilities: u32,
 }
 
 impl CpuClient {
@@ -772,9 +796,12 @@ impl CpuClient {
                     }
                     println!("Trying port: {}", port.port_name);
                     if let Some(rtk_port) = CpuClient::try_port(port, timeout.unwrap_or(1000)) {
-                        return Ok(CpuClient {
+                        let mut client = CpuClient {
                             port: Rc::new(RefCell::new(rtk_port)),
-                        });
+                            capabilities: 0,
+                        };
+                        client.capabilities = client.query_capabilities()?;
+                        return Ok(client);
                     }
                 }
 
@@ -801,6 +828,21 @@ impl CpuClient {
     /// their transport is not clocked by a UART baud rate.
     pub fn baud_rate(&self) -> serialport::Result<u32> {
         self.port.borrow().baud_rate()
+    }
+
+    /// Server features discovered at connection time.
+    pub fn capabilities(&self) -> u32 {
+        self.capabilities
+    }
+
+    fn query_capabilities(&mut self) -> Result<u32, CpuClientError> {
+        let command = ServerCommand::CmdCapabilities;
+        let mut bytes = [0; 4];
+        self.send_command_byte(command)?;
+        self.read_result_code(command)?;
+        self.recv_buf(&mut bytes)?;
+        self.read_result_code(command)?;
+        Ok(u32::from_le_bytes(bytes))
     }
 
     /// Try to open the specified serial port and query it for an Arduino808X server.
@@ -1111,7 +1153,17 @@ impl CpuClient {
     }
 
     pub fn cycle(&mut self) -> Result<bool, CpuClientError> {
+        self.cycle_n(1)
+    }
+
+    pub fn reset_cpu(&mut self) -> Result<bool, CpuClientError> {
+        self.send_command_byte(ServerCommand::CmdReset)?;
+        self.read_result_code(ServerCommand::CmdReset)
+    }
+
+    pub fn cycle_n(&mut self, count: u8) -> Result<bool, CpuClientError> {
         self.send_command_byte(ServerCommand::CmdCycle)?;
+        self.send_buf(&[count])?;
         self.read_result_code(ServerCommand::CmdCycle)
     }
 
@@ -1224,12 +1276,8 @@ impl CpuClient {
     }
 
     pub fn get_last_error(&mut self) -> Result<String, CpuClientError> {
-        let mut errbuf: [u8; 50] = [0; 50];
         self.send_command_byte(ServerCommand::CmdGetLastError)?;
-        let bytes = self.recv_dyn_buf(&mut errbuf)?;
-        let err_string = str::from_utf8(&errbuf[..bytes - 1]).unwrap();
-
-        Ok(err_string.to_string())
+        read_error_reply(self.port.borrow_mut().as_mut())
     }
 
     pub fn read_pin(&mut self, pin_no: CpuPin) -> Result<bool, CpuClientError> {
@@ -1528,5 +1576,48 @@ impl CpuClient {
         self.send_command_byte(ServerCommand::CmdSetJumpHint)?;
         self.send_buf(&buf)?;
         self.read_result_code(ServerCommand::CmdSetJumpHint)
+    }
+}
+
+// CmdGetLastError sends up to 255 UTF-8 bytes followed by its success byte,
+// with no NUL terminator or length prefix. Serial reads may split anywhere.
+fn read_error_reply<R: Read + ?Sized>(reader: &mut R) -> Result<String, CpuClientError> {
+    let mut message = Vec::new();
+    for _ in 0..256 {
+        let mut byte = [0];
+        reader.read_exact(&mut byte).map_err(|_| CpuClientError::ReadFailure)?;
+        match byte[0] {
+            0x01 => return String::from_utf8(message).map_err(|_| CpuClientError::TypeConversionError),
+            0x00 => return Err(CpuClientError::CommandFailed(ServerCommand::CmdGetLastError)),
+            value => message.push(value),
+        }
+    }
+    Err(CpuClientError::BadValue(ServerCommand::CmdGetLastError))
+}
+
+#[cfg(test)]
+mod error_reply_tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn reads_error_and_result_byte() {
+        let message = "Trap run requires a loaded trap fixture, 1..1000000 cycles, and an endpoint for continue";
+        let mut reply = Cursor::new([message.as_bytes(), &[0x01, 0xAA]].concat());
+        assert_eq!(read_error_reply(&mut reply).unwrap(), message);
+        assert_eq!(reply.position(), (message.len() + 1) as u64);
+        let mut next = [0];
+        reply.read_exact(&mut next).unwrap();
+        assert_eq!(next, [0xAA]);
+        assert_eq!(read_error_reply(&mut Cursor::new([0x01])).unwrap(), "");
+        assert_eq!(read_error_reply(&mut Cursor::new([vec![b'x'; 255], vec![0x01]].concat())).unwrap().len(), 255);
+    }
+
+    #[test]
+    fn rejects_malformed_error_replies() {
+        assert!(matches!(read_error_reply(&mut Cursor::new(b"partial")), Err(CpuClientError::ReadFailure)));
+        assert!(matches!(read_error_reply(&mut Cursor::new([0xFF, 0x01])), Err(CpuClientError::TypeConversionError)));
+        assert!(matches!(read_error_reply(&mut Cursor::new([b'x'; 256])), Err(CpuClientError::BadValue(_))));
+        assert!(matches!(read_error_reply(&mut Cursor::new([0x00])), Err(CpuClientError::CommandFailed(_))));
     }
 }
