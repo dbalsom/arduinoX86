@@ -171,6 +171,14 @@ public:
     return backend_->size();
   }
 
+  IBusBackendType backend_type() const {
+    return backend_->type();
+  }
+
+  void mem_read_bytes(uint32_t address, uint8_t* buffer, size_t length) {
+    backend_->read_bytes(address, buffer, length);
+  }
+
   // Memory reads: isFetch==true logs as CodeFetch
   uint8_t mem_read_u8(uint32_t address, bool isFetch) {
     uint8_t val = backend_->read_u8(address);

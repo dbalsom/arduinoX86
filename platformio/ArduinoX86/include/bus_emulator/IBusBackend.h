@@ -50,6 +50,24 @@ public:
   virtual uint16_t read_u16(uint32_t address) = 0;
   virtual uint16_t read_bus(uint32_t address, bool bhe) = 0;
   virtual uint8_t *get_ptr(uint32_t address) = 0;
+  // Copy a range even when the backend cannot expose a contiguous pointer.
+  virtual void read_bytes(uint32_t address, uint8_t* buffer, size_t length) {
+    if (length && (address & 1)) {
+      *buffer++ = read_u8(address++);
+      --length;
+    }
+    while (length >= 2) {
+      const uint16_t word = read_u16(address);
+      buffer[0] = uint8_t(word);
+      buffer[1] = uint8_t(word >> 8);
+      buffer += 2;
+      address += 2;
+      length -= 2;
+    }
+    if (length) {
+      *buffer = read_u8(address);
+    }
+  }
   virtual void     write_u8(uint32_t address, uint8_t  value) = 0;
   virtual void     write_u16(uint32_t address, uint16_t value) = 0;
   virtual void     write_bus(uint32_t address, uint16_t value, bool bhe) = 0;
